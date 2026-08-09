@@ -1,22 +1,24 @@
 """Abstraction du modele de langage : le reste du code ignore quel provider tourne.
 
-Deux implementations, choisies par config.yaml (mode: cloud | local) :
-  - ClaudeProvider  : API Anthropic (cloud, defaut).
-  - OllamaProvider  : Ollama en local (http://localhost:11434), 100% offline.
+Providers disponibles via config.yaml :
+  - ClaudeProvider : API Anthropic (cloud).
+  - OllamaProvider : Ollama en local (http://localhost:11434), 100% offline.
+  - KimiProvider   : Kimi K2.6 via NVIDIA NIM (API OpenAI-compatible).
 
-Les deux exposent la meme methode `repondre(systeme, historique, outils)` et
+Les trois exposent la meme methode `repondre(systeme, historique, outils)` et
 renvoient un objet a la forme d'une reponse Anthropic (.stop_reason + .content,
 chaque bloc ayant .type / .text / .name / .input / .id). Ainsi la boucle de
-dialogue de jarvis14 ne change pas selon le provider.
+dialogue et les outils de Jarvis restent independants du provider.
 
-L'historique reste au format "content blocks" d'Anthropic ; OllamaProvider le
-traduit vers/depuis le format d'Ollama de facon interne.
+L'historique interne reste au format "content blocks" d'Anthropic. Les providers
+OpenAI-compatible (Ollama et NVIDIA/Kimi) effectuent leur traduction en interne.
 """
 import json
 import logging
+import os
 
 # Magasin de certificats Windows (Malwarebytes intercepte le TLS : sans ca, les
-# appels a l'API Anthropic echouent en "certificate verify failed").
+# appels aux APIs cloud peuvent echouer en "certificate verify failed").
 try:
     import truststore
     truststore.inject_into_ssl()
@@ -72,7 +74,6 @@ class ClaudeProvider(ProviderLLM):
         return self.client is not None
 
     def repondre(self, systeme, historique, outils):
-        # La reponse native Anthropic a deja la bonne forme (.stop_reason/.content).
         return self.client.messages.create(
             model=self.modele,
             max_tokens=1024,
@@ -83,9 +84,171 @@ class ClaudeProvider(ProviderLLM):
         )
 
 
+# --------------------------------------------------------------- OpenAI-compatible helpers
+
+class _OpenAICompatibleMixin:
+    """Traductions communes aux APIs OpenAI-compatible (Ollama/NVIDIA)."""
+
+    def _traduire(self, systeme, historique, vision=True):
+        messages = [{"role": "system", "content": systeme}]
+
+        for m in historique:
+            role = m.get("role")
+            contenu = m.get("content")
+
+            if role == "user":
+                if isinstance(contenu, str):
+                    messages.append({"role": "user", "content": contenu})
+                    continue
+
+                blocks = contenu or []
+                text_parts = []
+                image_parts = []
+                tool_results = []
+
+                for item in blocks:
+                    if not isinstance(item, dict):
+                        continue
+                    typ = item.get("type")
+
+                    if typ == "text":
+                        text_parts.append(item.get("text", ""))
+                    elif typ == "image":
+                        if vision:
+                            part = self._image_part(item)
+                            if part:
+                                image_parts.append(part)
+                    elif typ == "tool_result":
+                        tool_results.append(item)
+
+                # Un message utilisateur contenant un resultat d'outil doit etre
+                # represente comme role=tool, avec le tool_call_id correspondant.
+                for result in tool_results:
+                    value = result.get("content", "")
+                    if isinstance(value, list):
+                        value = " ".join(
+                            str(x.get("text", "")) for x in value
+                            if isinstance(x, dict) and x.get("type") == "text"
+                        )
+                    messages.append({
+                        "role": "tool",
+                        "tool_call_id": result.get("tool_use_id", ""),
+                        "content": str(value),
+                    })
+
+                if text_parts or image_parts:
+                    if image_parts:
+                        content = []
+                        if text_parts:
+                            content.append({"type": "text", "text": " ".join(text_parts)})
+                        content.extend(image_parts)
+                    else:
+                        content = " ".join(text_parts)
+                    messages.append({"role": "user", "content": content})
+
+            elif role == "assistant":
+                if isinstance(contenu, str):
+                    messages.append({"role": "assistant", "content": contenu})
+                    continue
+
+                text = " ".join(
+                    b.text for b in (contenu or [])
+                    if getattr(b, "type", None) == "text" and b.text
+                ).strip()
+                appels = [
+                    b for b in (contenu or [])
+                    if getattr(b, "type", None) == "tool_use"
+                ]
+                msg = {"role": "assistant", "content": text or None}
+                if appels:
+                    msg["tool_calls"] = [
+                        {
+                            "id": b.id or f"call_{i}",
+                            "type": "function",
+                            "function": {
+                                "name": b.name,
+                                "arguments": json.dumps(b.input or {}, ensure_ascii=False),
+                            },
+                        }
+                        for i, b in enumerate(appels)
+                    ]
+                messages.append(msg)
+
+        return messages
+
+    @staticmethod
+    def _image_part(item):
+        """Convertit un bloc image Anthropic en image_url OpenAI.
+
+        Supporte les images deja encodees en base64. Si un autre format est
+        rencontre, on l'ignore proprement plutot que de casser la conversation.
+        """
+        source = item.get("source") or {}
+        media_type = source.get("media_type") or "image/png"
+        data = source.get("data")
+        if data:
+            return {
+                "type": "image_url",
+                "image_url": {"url": f"data:{media_type};base64,{data}"},
+            }
+        url = source.get("url") or item.get("url")
+        if url:
+            return {"type": "image_url", "image_url": {"url": url}}
+        return None
+
+    @staticmethod
+    def _outils(outils):
+        return [
+            {
+                "type": "function",
+                "function": {
+                    "name": o["name"],
+                    "description": o["description"],
+                    "parameters": o.get(
+                        "input_schema",
+                        {"type": "object", "properties": {}},
+                    ),
+                },
+            }
+            for o in outils
+        ]
+
+    @staticmethod
+    def _parser(rep):
+        choices = getattr(rep, "choices", None) or []
+        if not choices:
+            raise RuntimeError("Reponse LLM vide")
+
+        msg = choices[0].message
+        blocs = []
+        texte = (getattr(msg, "content", None) or "").strip()
+        if texte:
+            blocs.append(Bloc("text", text=texte))
+
+        for tc in getattr(msg, "tool_calls", None) or []:
+            fn = getattr(tc, "function", None)
+            if fn is None:
+                continue
+            args = getattr(fn, "arguments", {}) or {}
+            if isinstance(args, str):
+                args = json.loads(args)
+            blocs.append(
+                Bloc(
+                    "tool_use",
+                    id=getattr(tc, "id", None),
+                    name=getattr(fn, "name", None),
+                    input=args or {},
+                )
+            )
+
+        finish = getattr(choices[0], "finish_reason", None)
+        stop = "tool_use" if blocs and any(b.type == "tool_use" for b in blocs) else finish or "end"
+        return Reponse(stop, blocs)
+
+
 # --------------------------------------------------------------- Ollama (local)
 
-class OllamaProvider(ProviderLLM):
+class OllamaProvider(_OpenAICompatibleMixin, ProviderLLM):
     nom = "Ollama"
 
     def __init__(self):
@@ -100,8 +263,10 @@ class OllamaProvider(ProviderLLM):
         except Exception:
             return False
 
-    # -- traduction historique Anthropic -> messages Ollama --
-    def _traduire(self, systeme, historique):
+    def _traduire_ollama(self, systeme, historique):
+        # On garde la traduction historique propre au projet pour ne pas changer
+        # le comportement Ollama existant. Les tool IDs sont conserves quand ils
+        # existent, ce qui ameliore les providers OpenAI-compatibles sans casser Ollama.
         messages = [{"role": "system", "content": systeme}]
         for m in historique:
             role, contenu = m.get("role"), m.get("content")
@@ -114,48 +279,56 @@ class OllamaProvider(ProviderLLM):
                             continue
                         if item.get("type") == "tool_result":
                             c = item.get("content")
-                            if isinstance(c, list):   # bloc image
+                            if isinstance(c, list):
                                 c = "[image capturee — la vision n'est pas disponible en mode local]"
                             messages.append({"role": "tool", "content": str(c)})
                         elif item.get("type") == "image":
-                            messages.append({"role": "user",
-                                             "content": "[image — vision indisponible en local]"})
-            else:  # assistant
+                            messages.append({"role": "user", "content": "[image — vision indisponible en local]"})
+            else:
                 if isinstance(contenu, str):
                     messages.append({"role": "assistant", "content": contenu})
                 else:
-                    texte = " ".join(b.text for b in (contenu or [])
-                                     if getattr(b, "type", None) == "text" and b.text)
+                    texte = " ".join(
+                        b.text for b in (contenu or [])
+                        if getattr(b, "type", None) == "text" and b.text
+                    )
                     appels = [b for b in (contenu or []) if getattr(b, "type", None) == "tool_use"]
                     msg = {"role": "assistant", "content": texte}
                     if appels:
                         msg["tool_calls"] = [
-                            {"function": {"name": b.name, "arguments": b.input or {}}}
-                            for b in appels]
+                            {
+                                "id": b.id or f"call_{i}",
+                                "type": "function",
+                                "function": {
+                                    "name": b.name,
+                                    "arguments": b.input or {},
+                                },
+                            }
+                            for i, b in enumerate(appels)
+                        ]
                     messages.append(msg)
         return messages
-
-    def _outils(self, outils):
-        return [{"type": "function", "function": {
-            "name": o["name"], "description": o["description"],
-            "parameters": o.get("input_schema", {"type": "object", "properties": {}})}}
-            for o in outils]
 
     def _chat(self, messages, tools, nudge=None):
         import requests
         if nudge:
             messages = messages + [{"role": "user", "content": nudge}]
-        # think=false : desactive le "raisonnement" natif (qwen3.5, etc.). Sinon le
-        # modele est tres lent et rend parfois ses appels d'outils en texte au lieu
-        # de les executer. Un modele sans thinking ignore ce parametre.
-        r = requests.post(f"{self.hote}/api/chat", timeout=120, json={
-            "model": self.modele, "messages": messages, "tools": tools,
-            "stream": False, "think": bool(reglage("ollama.think", False)),
-            "options": {"temperature": 0.3}})
+        r = requests.post(
+            f"{self.hote}/api/chat",
+            timeout=120,
+            json={
+                "model": self.modele,
+                "messages": messages,
+                "tools": tools,
+                "stream": False,
+                "think": bool(reglage("ollama.think", False)),
+                "options": {"temperature": 0.3},
+            },
+        )
         r.raise_for_status()
         return r.json()
 
-    def _parser(self, rep):
+    def _parser_ollama(self, rep):
         msg = rep.get("message", {}) or {}
         blocs = []
         texte = (msg.get("content") or "").strip()
@@ -165,28 +338,109 @@ class OllamaProvider(ProviderLLM):
             fn = tc.get("function", {}) or {}
             args = fn.get("arguments", {})
             if isinstance(args, str):
-                args = json.loads(args)   # peut lever -> gere par le retry
-            blocs.append(Bloc("tool_use", id=f"call_{i}", name=fn.get("name"), input=args or {}))
+                args = json.loads(args)
+            blocs.append(
+                Bloc(
+                    "tool_use",
+                    id=tc.get("id") or f"call_{i}",
+                    name=fn.get("name"),
+                    input=args or {},
+                )
+            )
         stop = "tool_use" if any(b.type == "tool_use" for b in blocs) else "end"
         return Reponse(stop, blocs)
 
     def repondre(self, systeme, historique, outils):
-        messages = self._traduire(systeme, historique)
+        messages = self._traduire_ollama(systeme, historique)
+        tools = self._outils(outils)
+        try:
+            return self._parser_ollama(self._chat(messages, tools))
+        except Exception as e:
+            LOG.warning("ollama: 1er essai en echec (%s), retry plus directif", e)
+            nudge = (
+                "Rappel : pour agir, appelle l'outil approprie via un tool call "
+                "avec des arguments JSON valides ; sinon reponds simplement en texte."
+            )
+            try:
+                return self._parser_ollama(self._chat(messages, tools, nudge=nudge))
+            except Exception:
+                LOG.exception("ollama: echec apres retry")
+                return Reponse(
+                    "end",
+                    [Bloc("text", text=(
+                        "Desole, le modele local n'a pas reussi a traiter la demande "
+                        "correctement. Reessaie en reformulant, ou repasse en mode cloud."
+                    ))],
+                )
+
+
+# --------------------------------------------------------------- Kimi / NVIDIA NIM (cloud)
+
+class KimiProvider(_OpenAICompatibleMixin, ProviderLLM):
+    """Kimi K2.6 servi par NVIDIA NIM via l'API OpenAI-compatible."""
+
+    nom = "Kimi (NVIDIA)"
+
+    def __init__(self):
+        from openai import OpenAI
+
+        # La variable d'environnement est prioritaire pour eviter de versionner
+        # accidentellement une cle NVIDIA. Le config.yaml reste compatible avec
+        # le reste du projet si l'utilisateur prefere y mettre son secret local.
+        cle = os.getenv("NVIDIA_API_KEY") or reglage("nvidia.cle", "")
+        self.modele = reglage("nvidia.modele", "moonshotai/kimi-k2.6")
+        self.base_url = reglage(
+            "nvidia.base_url",
+            "https://integrate.api.nvidia.com/v1",
+        ).rstrip("/")
+        self.thinking = bool(reglage("nvidia.thinking", False))
+        self.client = (
+            OpenAI(api_key=cle, base_url=self.base_url, timeout=120.0)
+            if cle
+            else None
+        )
+
+    def disponible(self):
+        return self.client is not None
+
+    def _chat(self, messages, tools):
+        kwargs = {
+            "model": self.modele,
+            "messages": messages,
+            "tools": tools,
+            "tool_choice": "auto",
+            "max_tokens": 2048,
+            "temperature": 0.3,
+            "stream": False,
+        }
+        # Kimi K2.6 active le raisonnement par defaut. Pour un assistant vocal,
+        # le desactiver donne une latence bien plus faible et reste compatible
+        # avec le tool calling.
+        kwargs["chat_template_kwargs"] = {"thinking": self.thinking}
+        if not self.thinking:
+            kwargs["include_reasoning"] = False
+        return self.client.chat.completions.create(**kwargs)
+
+    def repondre(self, systeme, historique, outils):
+        if not self.client:
+            return Reponse(
+                "end",
+                [Bloc("text", text=(
+                    "Kimi n'est pas configure. Definis NVIDIA_API_KEY ou nvidia.cle "
+                    "dans config.yaml."
+                ))],
+            )
+
+        messages = self._traduire(systeme, historique, vision=True)
         tools = self._outils(outils)
         try:
             return self._parser(self._chat(messages, tools))
         except Exception as e:
-            LOG.warning("ollama: 1er essai en echec (%s), retry plus directif", e)
-            # Retry unique, avec une consigne plus stricte sur l'appel d'outil.
-            nudge = ("Rappel : pour agir, appelle l'outil approprie via un tool call "
-                     "avec des arguments JSON valides ; sinon reponds simplement en texte.")
-            try:
-                return self._parser(self._chat(messages, tools, nudge=nudge))
-            except Exception:
-                LOG.exception("ollama: echec apres retry")
-                return Reponse("end", [Bloc("text", text=(
-                    "Desole, le modele local n'a pas reussi a traiter la demande "
-                    "correctement. Reessaie en reformulant, ou repasse en mode cloud."))])
+            LOG.exception("kimi: appel NVIDIA echoue")
+            return Reponse(
+                "end",
+                [Bloc("text", text=f"Erreur Kimi/NVIDIA : {e}")],
+            )
 
 
 # --------------------------------------------------------------- fabrique
@@ -195,10 +449,15 @@ _LLM = None
 
 
 def llm():
-    """Provider LLM courant (selon config.yaml mode: cloud|local)."""
+    """Provider LLM courant (mode: cloud | local | kimi)."""
     global _LLM
     if _LLM is None:
         mode = (reglage("mode", "cloud") or "cloud").lower()
-        _LLM = OllamaProvider() if mode == "local" else ClaudeProvider()
+        if mode == "local":
+            _LLM = OllamaProvider()
+        elif mode == "kimi":
+            _LLM = KimiProvider()
+        else:
+            _LLM = ClaudeProvider()
         LOG.info("provider LLM : %s (mode %s)", _LLM.nom, mode)
     return _LLM
