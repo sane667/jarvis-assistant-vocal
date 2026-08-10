@@ -57,7 +57,7 @@ flowchart LR
 
 | | **cloud** | **local** | **nvidia** |
 |---|---|---|---|
-| LLM | Claude (API Anthropic) | Ollama (`qwen3.5:4b`…) | NVIDIA NIM (`openai/gpt-oss-120b` par défaut) |
+| LLM | Claude (API Anthropic) | Ollama (`qwen3.5:4b`…) | NVIDIA NIM (`meta/llama-3.1-8b-instruct`) |
 | Voix | ElevenLabs | Piper | Piper ou ElevenLabs |
 | Transcription | faster-whisper (local) | faster-whisper (local) | faster-whisper (local) |
 | Tools | ✅ | ✅ | ✅ |
@@ -67,28 +67,15 @@ flowchart LR
 
 Bascule en une ligne : `mode: cloud`, `mode: local` ou `mode: nvidia`.
 
-Le provider NVIDIA utilise l'API OpenAI-compatible de NVIDIA. Le modèle par défaut est
-`openai/gpt-oss-120b`, qui prend en charge le tool calling ; `reasoning_effort: low` est
-utilisé par défaut pour garder une bonne réactivité vocale. Le modèle peut être changé
-dans `nvidia.modele` sans modifier le code.
+### NVIDIA recommandé pour la voix
+
+Pour l'assistant vocal, le modèle recommandé est `meta/llama-3.1-8b-instruct` : il est
+beaucoup plus réactif qu'un gros modèle de raisonnement et prend en charge le tool calling.
+Les modèles de raisonnement lourds comme `openai/gpt-oss-120b` restent intéressants pour
+une future architecture multi-agents et les tâches longues, mais ne sont pas le choix par
+défaut pour chaque commande vocale.
 
 La clé doit de préférence rester dans la variable d'environnement `NVIDIA_API_KEY` :
-
-```powershell
-$env:NVIDIA_API_KEY = "ta_cle_NVIDIA"
-```
-
-## 🚀 Démarrage rapide
-
-Prérequis : **Python 3.13**, [uv](https://docs.astral.sh/uv/), Windows 11, un micro.
-
-```bash
-uv sync
-uv run playwright install chromium
-copy config.example.yaml config.yaml
-```
-
-Pour NVIDIA sous PowerShell :
 
 ```powershell
 $env:NVIDIA_API_KEY = "ta_cle_NVIDIA"
@@ -99,9 +86,14 @@ Puis configure :
 ```yaml
 mode: nvidia
 nvidia:
-  modele: "openai/gpt-oss-120b"
-  reasoning_effort: "low"
+  modele: "meta/llama-3.1-8b-instruct"
+  reasoning_effort: ""
+  max_tokens: 512
+  temperature: 0.2
+voix_locale: piper
 ```
+
+Le mode NVIDIA n'impose pas ElevenLabs : Piper reste local et gratuit.
 
 Teste le provider avant de lancer tout Jarvis :
 
@@ -146,7 +138,7 @@ La confiance est intégrée, pas rajoutée :
 - **Confirmation vocale** avant toute action irréversible (envoi de mail, réservation, suppression, appel…).
 - **Les appels se présentent** honnêtement : *« Bonjour, je suis l'assistant vocal automatisé de [prénom]… »* — jamais en se faisant passer pour un humain.
 - **Jamais** de mot de passe ni de données bancaires saisis, jamais de paiement automatique.
-- **Domaines protégés** (banque, impôts, santé) sur ton vrai navigateur = **lecture seule**.
+- **Domaines protégés** (banque, impôts, santé) sur ton vrai navigateur = lecture seule.
 - **Secrets & données perso jamais versionnés** (`config.yaml`, mémoire, logs, transcriptions d'appels, tokens OAuth — tous gitignorés).
 - Au téléphone, Jarvis ne confirme que ce que tu as validé **avant** l'appel.
 
@@ -167,4 +159,4 @@ est auto-découvert, aucun câblage. Merci de ne jamais committer de vrais secre
 
 ## 📄 Licence
 
-MIT — voir [LICENSE](LICENSE).
+MIT — voir `LICENSE`.
