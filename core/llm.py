@@ -374,14 +374,14 @@ class NvidiaProvider(_OpenAICompatibleMixin, ProviderLLM):
             "nvidia.base_url",
             "https://integrate.api.nvidia.com/v1",
         ).rstrip("/")
-        # Vide par defaut : le test de reference GPT-OSS fonctionne sans ce
-        # parametre sur l'endpoint NVIDIA public. Il reste configurable si une
-        # instance NIM multi-LLM locale le prend en charge.
-        self.reasoning_effort = reglage("nvidia.reasoning_effort", "")
-        self.max_tokens = int(reglage("nvidia.max_tokens", 2048))
+        # GPT-OSS est un modele de raisonnement. "low" est le bon defaut pour
+        # un assistant vocal : moins de latence, tout en gardant raisonnement
+        # et tool calling. NVIDIA documente low/medium/high pour GPT-OSS.
+        self.reasoning_effort = reglage("nvidia.reasoning_effort", "low")
+        self.max_tokens = int(reglage("nvidia.max_tokens", 1024))
         self.temperature = float(reglage("nvidia.temperature", 0.3))
         self.client = (
-            OpenAI(api_key=cle, base_url=self.base_url, timeout=120.0)
+            OpenAI(api_key=cle, base_url=self.base_url, timeout=90.0)
             if cle
             else None
         )
@@ -443,5 +443,5 @@ def llm():
             _LLM = NvidiaProvider()
         else:
             _LLM = ClaudeProvider()
-        LOG.info("provider LLM : %s (mode %s)", _LLM.nom, mode)
+        LOG.info("provider LLM : %s", _LLM.nom)
     return _LLM
