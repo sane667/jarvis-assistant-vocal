@@ -5,12 +5,12 @@
 ![Python](https://img.shields.io/badge/python-3.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
-![Mode](https://img.shields.io/badge/mode-cloud%20%7C%20local%20%7C%20kimi-orange)
+![Mode](https://img.shields.io/badge/mode-cloud%20%7C%20local%20%7C%20nvidia-orange)
 
 Un assistant vocal en français qui tourne **sur ta machine**. Dis *« Hey Jarvis »*,
 parle naturellement : il raisonne avec un LLM, utilise une boîte à outils extensible
 (domotique, PC, web, téléphone…) et te répond à voix haute. Trois modes sont disponibles :
-**cloud** (Claude + ElevenLabs), **local** (Ollama + Piper) ou **kimi** (Kimi K2.6 via NVIDIA NIM + TTS local/cloud).
+**cloud** (Claude + ElevenLabs), **local** (Ollama + Piper) ou **nvidia** (modèles NVIDIA NIM + TTS local/cloud).
 
 > Projet perso partagé tel quel. Cible **Windows 11**, nécessite un micro. La plupart des intégrations sont **optionnelles** et se désactivent proprement si non configurées.
 
@@ -40,7 +40,7 @@ parle naturellement : il raisonne avec un LLM, utilise une boîte à outils exte
 flowchart LR
     Mic([🎙️ Micro]) --> WW[openWakeWord<br/>« Hey Jarvis »]
     WW --> STT[faster-whisper<br/>STT — local]
-    STT --> LLM{{LLM<br/>Claude ☁️ OU Ollama 🏠 OU Kimi/NVIDIA ☁️}}
+    STT --> LLM{{LLM<br/>Claude ☁️ OU Ollama 🏠 OU NVIDIA ⚡}}
     LLM <-->|appels d'outils| TOOLS[🧰 Outils]
     LLM --> TTS{{TTS<br/>ElevenLabs ☁️ OU Piper 🏠}}
     TTS --> SPK([🔊 Haut-parleurs])
@@ -53,23 +53,30 @@ flowchart LR
     MCP -.-> EXT[Hermes Agent / Claude Desktop]
 ```
 
-## ☁️ Cloud vs 🏠 Local vs ⚡ Kimi
+## ☁️ Cloud vs 🏠 Local vs ⚡ NVIDIA
 
-| | **cloud** | **local** | **kimi** |
+| | **cloud** | **local** | **nvidia** |
 |---|---|---|---|
-| LLM | Claude (API Anthropic) | Ollama (`qwen3.5:4b`…) | Kimi K2.6 (NVIDIA NIM) |
+| LLM | Claude (API Anthropic) | Ollama (`qwen3.5:4b`…) | NVIDIA NIM (`openai/gpt-oss-120b` par défaut) |
 | Voix | ElevenLabs | Piper | Piper ou ElevenLabs |
 | Transcription | faster-whisper (local) | faster-whisper (local) | faster-whisper (local) |
 | Tools | ✅ | ✅ | ✅ |
-| Vision | ✅ | selon modèle | ✅ |
+| Vision | ✅ | selon modèle | selon modèle |
 | Coût | à l'usage | gratuit | selon quota NVIDIA |
 | Vie privée | appels API | **rien ne sort de la machine** | appels API NVIDIA |
 
-Bascule en une ligne : `mode: cloud`, `mode: local` ou `mode: kimi`.
+Bascule en une ligne : `mode: cloud`, `mode: local` ou `mode: nvidia`.
 
-Pour Kimi, configure `nvidia.modele: "moonshotai/kimi-k2.6"` et mets ta clé dans la variable d'environnement `NVIDIA_API_KEY` (recommandé), ou dans `nvidia.cle` de ton `config.yaml` local.
+Le provider NVIDIA utilise l'API OpenAI-compatible de NVIDIA. Le modèle par défaut est
+`openai/gpt-oss-120b`, qui prend en charge le tool calling ; `reasoning_effort: low` est
+utilisé par défaut pour garder une bonne réactivité vocale. Le modèle peut être changé
+dans `nvidia.modele` sans modifier le code.
 
-Kimi K2.6 utilise l'API OpenAI-compatible de NVIDIA et prend en charge les outils et les images. Le provider conserve le format interne de Jarvis afin que la boucle d'outils n'ait pas à connaître le fournisseur utilisé.
+La clé doit de préférence rester dans la variable d'environnement `NVIDIA_API_KEY` :
+
+```powershell
+$env:NVIDIA_API_KEY = "ta_cle_NVIDIA"
+```
 
 ## 🚀 Démarrage rapide
 
@@ -81,10 +88,24 @@ uv run playwright install chromium
 copy config.example.yaml config.yaml
 ```
 
-Pour Kimi sous PowerShell :
+Pour NVIDIA sous PowerShell :
 
 ```powershell
 $env:NVIDIA_API_KEY = "ta_cle_NVIDIA"
+```
+
+Puis configure :
+
+```yaml
+mode: nvidia
+nvidia:
+  modele: "openai/gpt-oss-120b"
+  reasoning_effort: "low"
+```
+
+Teste le provider avant de lancer tout Jarvis :
+
+```powershell
 uv run python scripts/test_nvidia.py
 ```
 
@@ -136,6 +157,7 @@ La confiance est intégrée, pas rajoutée :
 - [ ] TTS en streaming phrase par phrase (voir [docs/latency.md](docs/latency.md))
 - [ ] Boucle navigateur en 100 % local : la vision de `qwen3.5` lit déjà le texte des boutons (testé) — reste à valider le pilotage complet
 - [ ] Rafraîchissement auto des tokens Instagram entre redémarrages (partiel aujourd'hui)
+- [ ] Architecture multi-agents Tony : Elio (code), Lavanda (web), Clover (fichiers)
 
 ## 🤝 Contribuer
 
