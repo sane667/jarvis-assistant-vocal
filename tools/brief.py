@@ -19,16 +19,15 @@ from tools.temps import heure_et_date
     phrase_attente="D'accord, je te prepare ton brief, un instant.",
 )
 def faire_brief(**_arguments) -> str:
-    """Brief du moment.
+    """Construit un briefing uniquement a partir de donnees effectivement lues.
 
-    Accepte volontairement d'eventuels arguments parasites emis par certains LLM
-    pour un outil sans parametres (par exemple {"": {}}). Un briefing ne doit
-    jamais echouer uniquement a cause de la forme du tool call.
+    Le **_arguments absorbe les arguments parasites des LLM pour les outils sans
+    parametres (par exemple {"": {}}), afin que ce cas ne fasse pas echouer l'outil.
+    Le LLM ne doit ensuite que reformuler le resultat : il ne doit pas inventer
+    de compteurs absents.
     """
     morceaux = []
 
-    # Chaque source est independante : une panne de meteo, mails ou deadlines
-    # ne doit pas transformer tout le briefing en echec.
     for source in (heure_et_date, meteo):
         try:
             resultat = source()
@@ -51,8 +50,21 @@ def faire_brief(**_arguments) -> str:
         except Exception as e:
             morceaux.append(f"Lecture des mails indisponible : {e}")
     else:
-        # Important : on donne explicitement au LLM l'etat de la source au lieu
-        # de le laisser inventer un nombre de mails.
-        morceaux.append("La messagerie n'est pas configuree : aucun nombre de nouveaux mails disponible.")
+        morceaux.append(
+            "MESSAGERIE_NON_CONFIGUREE : le nombre de nouveaux mails est inconnu. "
+            "Ne donne aucun nombre de mails."
+        )
 
-    return " ".join(morceaux) if morceaux else "Aucune donnee de briefing disponible." 
+    # Discord n'est ajoute que si une source Discord reelle existe dans le projet.
+    # Ne jamais demander au LLM de deduire/inventer un nombre de mentions.
+    try:
+        from tools.notifications import discord_brief
+        discord = discord_brief()
+        if discord:
+            morceaux.append(str(discord))
+    except (ImportError, AttributeError):
+        pass
+    except Exception as e:
+        morceaux.append(f"Discord indisponible : {e}")
+
+    return " ".join(morceaux) if morceaux else "Aucune donnee de briefing disponible."
