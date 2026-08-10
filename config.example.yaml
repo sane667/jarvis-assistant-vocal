@@ -2,28 +2,26 @@
 # config.yaml n'est PAS versionne (voir .gitignore) : tes secrets restent chez toi.
 
 mode: cloud                    # cloud = Claude ; local = Ollama ; nvidia = NVIDIA NIM
-ollama:                        # mode local : modele de langage local (http://localhost:11434)
+ollama:
   hote: "http://localhost:11434"
   modele: "qwen3.5:4b"
   think: false
 
-nvidia:                        # mode nvidia : API NVIDIA NIM compatible OpenAI
+nvidia:
   cle: ""                     # recommande : variable d'environnement NVIDIA_API_KEY
   modele: "openai/gpt-oss-120b"
   base_url: "https://integrate.api.nvidia.com/v1"
-  reasoning_effort: "low"     # low | medium | high ; low recommande pour la voix
+  reasoning_effort: ""        # optionnel ; laisse vide sur l'API NVIDIA publique
   max_tokens: 2048
   temperature: 0.3
 
 voix_locale: piper
-
 piper:
   modele: ""
 kokoro:
   modele: ""
   voix: ""
   voix_nom: "ff_siwis"
-
 anthropic:
   cle: "sk-ant-..."
   modele: "claude-haiku-4-5"
@@ -35,14 +33,12 @@ elevenlabs:
 hue:
   pont: "192.168.1.XXX"
   cle: "ta-cle-hue"
-
 mail:
   adresse: "ton.adresse@gmail.com"
   mot_de_passe_app: ""
 audio:
   micro: 1
   haut_parleur: null
-
 whisper:
   modele: "medium"
 interruption:
