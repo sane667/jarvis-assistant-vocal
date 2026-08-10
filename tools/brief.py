@@ -1,4 +1,4 @@
-"""Brief : heure + meteo + deadlines + mails + Discord."""
+"""Brief : heure + meteo + echeances + mails + Discord."""
 from core.registre import get, outil
 from tools.mail import _mail_configure, lire_mails
 from tools.meteo import meteo
@@ -27,7 +27,6 @@ def faire_brief(**_arguments) -> str:
     """
     morceaux = []
 
-    # Heure/date et meteo sont des sources directes, jamais generees par le LLM.
     for nom, source in (("HEURE", heure_et_date), ("METEO", meteo)):
         try:
             resultat = source()
@@ -44,15 +43,25 @@ def faire_brief(**_arguments) -> str:
     except Exception:
         pass
 
+    # Le briefing distingue maintenant les nouveaux/non-lus des anciens mails.
     if _mail_configure():
         try:
-            mails = lire_mails(5)
-            morceaux.append(f"MAILS: {mails}")
+            from tools.brief_mail import compter_nouveaux_mails
+            nb = compter_nouveaux_mails()
+            if nb == 0:
+                morceaux.append("MAILS_NOUVEAUX: 0 — aucun nouveau mail non lu.")
+            else:
+                morceaux.append(f"MAILS_NOUVEAUX: {nb} — mails non lus.")
+                try:
+                    mails = lire_mails(min(nb, 5))
+                    morceaux.append(f"MAILS_RECENTS: {mails}")
+                except Exception:
+                    pass
         except Exception as e:
-            morceaux.append(f"MAILS: indisponible ({e})")
+            morceaux.append(f"MAILS_NOUVEAUX: indisponible ({e})")
     else:
         morceaux.append(
-            "MAILS: MESSAGERIE_NON_CONFIGUREE — nombre de nouveaux mails inconnu. "
+            "MAILS_NOUVEAUX: MESSAGERIE_NON_CONFIGUREE — nombre inconnu. "
             "Ne donne aucun nombre de mails."
         )
 
@@ -69,4 +78,6 @@ def faire_brief(**_arguments) -> str:
     except Exception as e:
         morceaux.append(f"DISCORD_MENTIONS: indisponible ({e})")
 
+    # Une ligne = une source de verite. Le modele doit reformuler toutes les lignes,
+    # pas completer les informations manquantes de sa propre imagination.
     return "\n".join(morceaux) if morceaux else "Aucune donnee de briefing disponible."
