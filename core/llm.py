@@ -374,7 +374,10 @@ class NvidiaProvider(_OpenAICompatibleMixin, ProviderLLM):
             "nvidia.base_url",
             "https://integrate.api.nvidia.com/v1",
         ).rstrip("/")
-        self.reasoning_effort = reglage("nvidia.reasoning_effort", "low")
+        # Vide par defaut : le test de reference GPT-OSS fonctionne sans ce
+        # parametre sur l'endpoint NVIDIA public. Il reste configurable si une
+        # instance NIM multi-LLM locale le prend en charge.
+        self.reasoning_effort = reglage("nvidia.reasoning_effort", "")
         self.max_tokens = int(reglage("nvidia.max_tokens", 2048))
         self.temperature = float(reglage("nvidia.temperature", 0.3))
         self.client = (
@@ -395,16 +398,11 @@ class NvidiaProvider(_OpenAICompatibleMixin, ProviderLLM):
             "stream": False,
         }
 
-        # NVIDIA attend tools/tool_choice uniquement quand des tools sont
-        # fournis. Cela evite les erreurs de function references sur les requetes
-        # texte simples.
         if tools:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
 
-        # GPT-OSS supporte officiellement reasoning_effort via Chat Completions.
-        # On n'envoie la valeur que si elle est explicitement configuree.
-        if self.modele.startswith("openai/gpt-oss") and self.reasoning_effort:
+        if self.reasoning_effort:
             kwargs["reasoning_effort"] = self.reasoning_effort
 
         return self.client.chat.completions.create(**kwargs)
