@@ -3,7 +3,7 @@
 Providers disponibles via config.yaml :
   - ClaudeProvider : API Anthropic (cloud).
   - OllamaProvider : Ollama en local (http://localhost:11434), 100% offline.
-  - KimiProvider   : Kimi K2.6 via NVIDIA NIM (API OpenAI-compatible).
+  - NvidiaProvider : modeles NVIDIA NIM via API OpenAI-compatible.
 
 Les trois exposent la meme methode `repondre(systeme, historique, outils)` et
 renvoient un objet a la forme d'une reponse Anthropic (.stop_reason + .content,
@@ -11,14 +11,12 @@ chaque bloc ayant .type / .text / .name / .input / .id). Ainsi la boucle de
 dialogue et les outils de Jarvis restent independants du provider.
 
 L'historique interne reste au format "content blocks" d'Anthropic. Les providers
-OpenAI-compatible (Ollama et NVIDIA/Kimi) effectuent leur traduction en interne.
+OpenAI-compatible (Ollama et NVIDIA) effectuent leur traduction en interne.
 """
 import json
 import logging
 import os
 
-# Magasin de certificats Windows (Malwarebytes intercepte le TLS : sans ca, les
-# appels aux APIs cloud peuvent echouer en "certificate verify failed").
 try:
     import truststore
     truststore.inject_into_ssl()
@@ -47,8 +45,6 @@ class Reponse:
         self.content = content
 
 
-# --------------------------------------------------------------- interface
-
 class ProviderLLM:
     nom = "?"
 
@@ -58,8 +54,6 @@ class ProviderLLM:
     def repondre(self, systeme, historique, outils):
         raise NotImplementedError
 
-
-# --------------------------------------------------------------- Claude (cloud)
 
 class ClaudeProvider(ProviderLLM):
     nom = "Claude"
@@ -84,10 +78,8 @@ class ClaudeProvider(ProviderLLM):
         )
 
 
-# --------------------------------------------------------------- OpenAI-compatible helpers
-
 class _OpenAICompatibleMixin:
-    """Traductions communes aux APIs OpenAI-compatible (Ollama/NVIDIA)."""
+    """Traductions communes aux APIs OpenAI-compatible."""
 
     def _traduire(self, systeme, historique, vision=True):
         messages = [{"role": "system", "content": systeme}]
@@ -110,7 +102,6 @@ class _OpenAICompatibleMixin:
                     if not isinstance(item, dict):
                         continue
                     typ = item.get("type")
-
                     if typ == "text":
                         text_parts.append(item.get("text", ""))
                     elif typ == "image":
@@ -121,8 +112,6 @@ class _OpenAICompatibleMixin:
                     elif typ == "tool_result":
                         tool_results.append(item)
 
-                # Un message utilisateur contenant un resultat d'outil doit etre
-                # represente comme role=tool, avec le tool_call_id correspondant.
                 for result in tool_results:
                     value = result.get("content", "")
                     if isinstance(value, list):
@@ -178,11 +167,6 @@ class _OpenAICompatibleMixin:
 
     @staticmethod
     def _image_part(item):
-        """Convertit un bloc image Anthropic en image_url OpenAI.
-
-        Supporte les images deja encodees en base64. Si un autre format est
-        rencontre, on l'ignore proprement plutot que de casser la conversation.
-        """
         source = item.get("source") or {}
         media_type = source.get("media_type") or "image/png"
         data = source.get("data")
@@ -231,7 +215,10 @@ class _OpenAICompatibleMixin:
                 continue
             args = getattr(fn, "arguments", {}) or {}
             if isinstance(args, str):
-                args = json.loads(args)
+                try:
+                    args = json.loads(args)
+                except json.JSONDecodeError as e:
+                    raise RuntimeError(f"Arguments d'outil invalides : {e}") from e
             blocs.append(
                 Bloc(
                     "tool_use",
@@ -242,11 +229,9 @@ class _OpenAICompatibleMixin:
             )
 
         finish = getattr(choices[0], "finish_reason", None)
-        stop = "tool_use" if blocs and any(b.type == "tool_use" for b in blocs) else finish or "end"
+        stop = "tool_use" if any(b.type == "tool_use" for b in blocs) else finish or "end"
         return Reponse(stop, blocs)
 
-
-# --------------------------------------------------------------- Ollama (local)
 
 class OllamaProvider(_OpenAICompatibleMixin, ProviderLLM):
     nom = "Ollama"
@@ -264,9 +249,6 @@ class OllamaProvider(_OpenAICompatibleMixin, ProviderLLM):
             return False
 
     def _traduire_ollama(self, systeme, historique):
-        # On garde la traduction historique propre au projet pour ne pas changer
-        # le comportement Ollama existant. Les tool IDs sont conserves quand ils
-        # existent, ce qui ameliore les providers OpenAI-compatibles sans casser Ollama.
         messages = [{"role": "system", "content": systeme}]
         for m in historique:
             role, contenu = m.get("role"), m.get("content")
@@ -374,26 +356,27 @@ class OllamaProvider(_OpenAICompatibleMixin, ProviderLLM):
                 )
 
 
-# --------------------------------------------------------------- Kimi / NVIDIA NIM (cloud)
+class NvidiaProvider(_OpenAICompatibleMixin, ProviderLLM):
+    """Modeles NVIDIA NIM via l'API OpenAI-compatible.
 
-class KimiProvider(_OpenAICompatibleMixin, ProviderLLM):
-    """Kimi K2.6 servi par NVIDIA NIM via l'API OpenAI-compatible."""
+    Par defaut, Tony utilise openai/gpt-oss-120b. Le modele est configurable
+    pour pouvoir tester d'autres modeles NVIDIA sans changer le code.
+    """
 
-    nom = "Kimi (NVIDIA)"
+    nom = "NVIDIA"
 
     def __init__(self):
         from openai import OpenAI
 
-        # La variable d'environnement est prioritaire pour eviter de versionner
-        # accidentellement une cle NVIDIA. Le config.yaml reste compatible avec
-        # le reste du projet si l'utilisateur prefere y mettre son secret local.
         cle = os.getenv("NVIDIA_API_KEY") or reglage("nvidia.cle", "")
-        self.modele = reglage("nvidia.modele", "moonshotai/kimi-k2.6")
+        self.modele = reglage("nvidia.modele", "openai/gpt-oss-120b")
         self.base_url = reglage(
             "nvidia.base_url",
             "https://integrate.api.nvidia.com/v1",
         ).rstrip("/")
-        self.thinking = bool(reglage("nvidia.thinking", False))
+        self.reasoning_effort = reglage("nvidia.reasoning_effort", "low")
+        self.max_tokens = int(reglage("nvidia.max_tokens", 2048))
+        self.temperature = float(reglage("nvidia.temperature", 0.3))
         self.client = (
             OpenAI(api_key=cle, base_url=self.base_url, timeout=120.0)
             if cle
@@ -407,18 +390,23 @@ class KimiProvider(_OpenAICompatibleMixin, ProviderLLM):
         kwargs = {
             "model": self.modele,
             "messages": messages,
-            "tools": tools,
-            "tool_choice": "auto",
-            "max_tokens": 2048,
-            "temperature": 0.3,
+            "max_tokens": self.max_tokens,
+            "temperature": self.temperature,
             "stream": False,
         }
-        # Kimi K2.6 active le raisonnement par defaut. Pour un assistant vocal,
-        # le desactiver donne une latence bien plus faible et reste compatible
-        # avec le tool calling.
-        kwargs["chat_template_kwargs"] = {"thinking": self.thinking}
-        if not self.thinking:
-            kwargs["include_reasoning"] = False
+
+        # NVIDIA attend tools/tool_choice uniquement quand des tools sont
+        # fournis. Cela evite les erreurs de function references sur les requetes
+        # texte simples.
+        if tools:
+            kwargs["tools"] = tools
+            kwargs["tool_choice"] = "auto"
+
+        # GPT-OSS supporte officiellement reasoning_effort via Chat Completions.
+        # On n'envoie la valeur que si elle est explicitement configuree.
+        if self.modele.startswith("openai/gpt-oss") and self.reasoning_effort:
+            kwargs["reasoning_effort"] = self.reasoning_effort
+
         return self.client.chat.completions.create(**kwargs)
 
     def repondre(self, systeme, historique, outils):
@@ -426,8 +414,8 @@ class KimiProvider(_OpenAICompatibleMixin, ProviderLLM):
             return Reponse(
                 "end",
                 [Bloc("text", text=(
-                    "Kimi n'est pas configure. Definis NVIDIA_API_KEY ou nvidia.cle "
-                    "dans config.yaml."
+                    "NVIDIA n'est pas configure. Definis NVIDIA_API_KEY dans "
+                    "l'environnement ou nvidia.cle dans config.yaml."
                 ))],
             )
 
@@ -436,27 +424,25 @@ class KimiProvider(_OpenAICompatibleMixin, ProviderLLM):
         try:
             return self._parser(self._chat(messages, tools))
         except Exception as e:
-            LOG.exception("kimi: appel NVIDIA echoue")
+            LOG.exception("nvidia: appel NVIDIA echoue")
             return Reponse(
                 "end",
-                [Bloc("text", text=f"Erreur Kimi/NVIDIA : {e}")],
+                [Bloc("text", text=f"Erreur NVIDIA : {e}")],
             )
 
-
-# --------------------------------------------------------------- fabrique
 
 _LLM = None
 
 
 def llm():
-    """Provider LLM courant (mode: cloud | local | kimi)."""
+    """Provider LLM courant (mode: cloud | local | nvidia)."""
     global _LLM
     if _LLM is None:
         mode = (reglage("mode", "cloud") or "cloud").lower()
         if mode == "local":
             _LLM = OllamaProvider()
-        elif mode == "kimi":
-            _LLM = KimiProvider()
+        elif mode == "nvidia":
+            _LLM = NvidiaProvider()
         else:
             _LLM = ClaudeProvider()
         LOG.info("provider LLM : %s (mode %s)", _LLM.nom, mode)
