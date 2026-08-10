@@ -1,5 +1,5 @@
-"""Brief : heure + meteo + apercu des derniers mails, en un seul outil."""
-from core.registre import outil
+"""Brief : heure + meteo + deadlines + mails + Discord."""
+from core.registre import get, outil
 from tools.mail import _mail_configure, lire_mails
 from tools.meteo import meteo
 from tools.temps import heure_et_date
@@ -7,10 +7,11 @@ from tools.temps import heure_et_date
 
 @outil(
     nom="faire_brief",
-    description="Fait un brief : l'heure, la meteo et un apercu des derniers mails. "
-                "A utiliser quand l'utilisateur dit 'fais-moi un brief', 'quoi de "
-                "neuf', 'ma journee'. Apres le brief, propose de lire, repondre ou "
-                "jeter un mail.",
+    description="Fait un briefing complet : heure/date, meteo, echeances Loopstr, "
+                "nouveaux mails et mentions Discord. A utiliser quand l'utilisateur "
+                "dit 'fais-moi un brief', 'quoi de neuf', 'ma journee'. Le resultat "
+                "contient uniquement les donnees effectivement disponibles ; ne "
+                "jamais inventer une donnee manquante.",
     parametres={
         "type": "object",
         "properties": {},
@@ -19,52 +20,53 @@ from tools.temps import heure_et_date
     phrase_attente="D'accord, je te prepare ton brief, un instant.",
 )
 def faire_brief(**_arguments) -> str:
-    """Construit un briefing uniquement a partir de donnees effectivement lues.
+    """Construit un briefing uniquement a partir de sources reelles.
 
-    Le **_arguments absorbe les arguments parasites des LLM pour les outils sans
-    parametres (par exemple {"": {}}), afin que ce cas ne fasse pas echouer l'outil.
-    Le LLM ne doit ensuite que reformuler le resultat : il ne doit pas inventer
-    de compteurs absents.
+    Les arguments parasites des LLM pour les outils sans parametres sont absorbes
+    volontairement (par exemple {"": {}}).
     """
     morceaux = []
 
-    for source in (heure_et_date, meteo):
+    # Heure/date et meteo sont des sources directes, jamais generees par le LLM.
+    for nom, source in (("HEURE", heure_et_date), ("METEO", meteo)):
         try:
             resultat = source()
             if resultat:
-                morceaux.append(str(resultat))
+                morceaux.append(f"{nom}: {resultat}")
         except Exception as e:
-            morceaux.append(f"Source indisponible : {e}")
+            morceaux.append(f"{nom}: indisponible ({e})")
 
     try:
         from tools.loopstr import deadlines_brief
         deadlines = deadlines_brief()
         if deadlines:
-            morceaux.append(str(deadlines))
+            morceaux.append(f"AGENDA/ECHEANCES: {deadlines}")
     except Exception:
         pass
 
     if _mail_configure():
         try:
-            morceaux.append(str(lire_mails(5)))
+            mails = lire_mails(5)
+            morceaux.append(f"MAILS: {mails}")
         except Exception as e:
-            morceaux.append(f"Lecture des mails indisponible : {e}")
+            morceaux.append(f"MAILS: indisponible ({e})")
     else:
         morceaux.append(
-            "MESSAGERIE_NON_CONFIGUREE : le nombre de nouveaux mails est inconnu. "
+            "MAILS: MESSAGERIE_NON_CONFIGUREE — nombre de nouveaux mails inconnu. "
             "Ne donne aucun nombre de mails."
         )
 
-    # Discord n'est ajoute que si une source Discord reelle existe dans le projet.
-    # Ne jamais demander au LLM de deduire/inventer un nombre de mentions.
+    # On passe par le registre : le module Discord peut donc rester auto-decouvert
+    # sans que brief.py connaisse son nom de fichier.
     try:
-        from tools.notifications import discord_brief
-        discord = discord_brief()
-        if discord:
-            morceaux.append(str(discord))
-    except (ImportError, AttributeError):
-        pass
+        outil_discord = get("get_mentions_summary")
+        if outil_discord is not None:
+            mentions = outil_discord.fonction()
+            if mentions:
+                morceaux.append(f"DISCORD_MENTIONS: {mentions}")
+        else:
+            morceaux.append("DISCORD_MENTIONS: outil indisponible")
     except Exception as e:
-        morceaux.append(f"Discord indisponible : {e}")
+        morceaux.append(f"DISCORD_MENTIONS: indisponible ({e})")
 
-    return " ".join(morceaux) if morceaux else "Aucune donnee de briefing disponible."
+    return "\n".join(morceaux) if morceaux else "Aucune donnee de briefing disponible."
