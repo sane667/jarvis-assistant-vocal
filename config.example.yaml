@@ -11,8 +11,8 @@ nvidia:
   cle: ""                     # recommande : variable d'environnement NVIDIA_API_KEY
   modele: "openai/gpt-oss-120b"
   base_url: "https://integrate.api.nvidia.com/v1"
-  reasoning_effort: ""        # optionnel ; laisse vide sur l'API NVIDIA publique
-  max_tokens: 2048
+  reasoning_effort: "low"     # low = rapide ; medium/high = plus de raisonnement
+  max_tokens: 1024
   temperature: 0.3
 
 voix_locale: piper
