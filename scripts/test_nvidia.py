@@ -1,4 +1,4 @@
-"""Smoke-test Kimi/NVIDIA without starting the whole voice assistant.
+"""Smoke-test NVIDIA NIM without starting the whole voice assistant.
 
 Usage (PowerShell):
     $env:NVIDIA_API_KEY = "..."
@@ -12,10 +12,9 @@ import os
 import sys
 from pathlib import Path
 
-# Allow running this file directly from the repository root.
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
-from core.llm import KimiProvider
+from core.llm import NvidiaProvider
 
 
 TOOLS = [
@@ -32,7 +31,6 @@ TOOLS = [
     }
 ]
 
-
 SYSTEM = (
     "Tu es un assistant vocal de test. Reponds en francais, de facon concise. "
     "Quand une action demande un outil, utilise le tool call approprie."
@@ -45,19 +43,25 @@ def main():
         print('PowerShell: $env:NVIDIA_API_KEY = "ta_cle"')
         return 1
 
-    provider = KimiProvider()
+    provider = NvidiaProvider()
     if not provider.disponible():
-        print("ERREUR: provider Kimi indisponible.")
+        print("ERREUR: provider NVIDIA indisponible.")
         return 1
 
     print(f"Modele: {provider.modele}")
+    print(f"Reasoning effort: {provider.reasoning_effort or 'default'}")
+
     print("1/2 Test texte...")
     rep = provider.repondre(
         SYSTEM,
-        [{"role": "user", "content": "Dis simplement : Kimi est connecte."}],
+        [{"role": "user", "content": "Dis simplement : NVIDIA est connecte."}],
         [],
     )
-    print("   ->", " ".join(b.text for b in rep.content if b.type == "text"))
+    text = " ".join(b.text for b in rep.content if b.type == "text")
+    print("   ->", text or "(aucun texte)")
+    if not text:
+        print("   ECHEC: reponse texte vide.")
+        return 2
 
     print("2/2 Test tool calling...")
     rep = provider.repondre(
@@ -74,7 +78,7 @@ def main():
     for call in calls:
         print(f"   -> {call.name}({call.input}) [id={call.id}]")
 
-    print("OK: provider Kimi + tool calling fonctionnent.")
+    print("OK: NVIDIA + GPT-OSS + tool calling fonctionnent.")
     return 0
 
 
