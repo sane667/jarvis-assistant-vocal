@@ -107,14 +107,15 @@ def lancer_agent(agent: str, objectif: str, contexte: str = "", critere_succes: 
 @outil(
     "confirmer_clover",
     (
-        "Confirme et lance la dernière tâche Clover en attente. A utiliser uniquement "
-        "apres que l'utilisateur a explicitement confirme le repertoire et l'operation. "
-        "Clover ne supprime jamais : les suppressions sont traitees comme une mise en quarantaine."
+        "Lance une tâche Clover précédemment mise en attente. N'utilise cet outil "
+        "qu'après que l'utilisateur a explicitement répondu oui à la demande de "
+        "confirmation du repertoire et de l'operation. Clover ne supprime jamais : "
+        "les suppressions sont traitees comme une mise en quarantaine."
     ),
     {"type": "object", "properties": {
         "token": {"type": "string", "description": "Jeton clover-N fourni par lancer_agent"}
     }, "required": ["token"]},
-    confirmation=True,
+    confirmation=False,
 )
 def confirmer_clover(token: str):
     try:
