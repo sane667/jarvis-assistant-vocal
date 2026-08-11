@@ -99,6 +99,7 @@ Teste le provider avant de lancer tout Jarvis :
 
 ```powershell
 uv run python scripts/test_nvidia.py
+uv run python scripts/test_nvidia_compat.py
 ```
 
 Le smoke test vérifie une réponse texte puis un tool call sans exécuter réellement d'outil.
@@ -110,6 +111,21 @@ uv run python jarvis14.py
 ```
 
 Dis **« Hey Jarvis »**.
+
+## 🧰 Outils et audit
+
+Les providers partagent le même registre d'outils : ajouter ou corriger un outil ne
+nécessite donc pas de branche spécifique NVIDIA/Ollama/Claude. Voir
+[docs/tools.md](docs/tools.md).
+
+Avant une grosse modification du registre :
+
+```powershell
+uv run python scripts/audit_tools.py
+```
+
+L'audit est non destructif : il vérifie la découverte, les schemas, les signatures
+Python et la conversion OpenAI function calling sans lancer de commandes réelles.
 
 ## ⚙️ Configuration
 
@@ -130,6 +146,8 @@ Tout est dans un unique `config.yaml` **non versionné** (copié depuis
 | Instagram | [docs/instagram.md](docs/instagram.md) |
 | Serveur MCP | [docs/mcp.md](docs/mcp.md) |
 | **Latence perçue (UX)** | [docs/latency.md](docs/latency.md) |
+| **Outils et contrat multi-provider** | [docs/tools.md](docs/tools.md) |
+| **Architecture multi-agents / Mode Projet** | [docs/agents.md](docs/agents.md) |
 
 ## 🛡️ Éthique & Sécurité
 
@@ -144,12 +162,21 @@ La confiance est intégrée, pas rajoutée :
 
 ## 🗺️ Roadmap
 
-- [ ] Contrôle des lampes vidéo Godox (aujourd'hui Hue seulement)
-- [ ] Outils notes & rappels
+- [x] Provider NVIDIA OpenAI-compatible + tool calling
+- [x] Piper local en mode NVIDIA
+- [x] Personnalité Jarvis + réponses vocales courtes
+- [x] Briefing multi-sources
+- [x] Audit structurel du registre d'outils
 - [ ] TTS en streaming phrase par phrase (voir [docs/latency.md](docs/latency.md))
-- [ ] Boucle navigateur en 100 % local : la vision de `qwen3.5` lit déjà le texte des boutons (testé) — reste à valider le pilotage complet
-- [ ] Rafraîchissement auto des tokens Instagram entre redémarrages (partiel aujourd'hui)
-- [ ] Architecture multi-agents Tony : Elio (code), Lavanda (web), Clover (fichiers)
+- [ ] Vision multimodale NVIDIA + routage automatique
+- [ ] Génération d'images/vidéo
+- [ ] Outils notes & rappels
+- [ ] Boucle navigateur en 100 % local : vision et pilotage complet
+- [ ] Rafraîchissement auto des tokens Instagram entre redémarrages
+- [ ] **Mode Projet + Agent Manager** (voir [docs/agents.md](docs/agents.md))
+- [ ] Elio — agent code
+- [ ] Lavanda — agent web
+- [ ] Clover — agent fichiers
 
 ## 🤝 Contribuer
 
