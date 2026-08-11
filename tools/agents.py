@@ -3,6 +3,21 @@ from core.registre import outil
 from core.agent_manager import manager
 from core.project_store import store
 
+# Register built-in agents when the tool module is auto-discovered.
+# Imports are deliberately local to avoid making core.agent_manager depend on
+# concrete agents.
+def _register_agents():
+    from agents.elio import register as register_elio
+    from agents.lavanda import register as register_lavanda
+    from agents.clover import register as register_clover
+    m = manager()
+    register_elio(m)
+    register_lavanda(m)
+    register_clover(m)
+
+
+_register_agents()
+
 
 def _workspace(explicit: str | None = None) -> str:
     if explicit:
