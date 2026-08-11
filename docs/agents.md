@@ -1,28 +1,34 @@
 # Architecture multi-agents — Mode Projet
 
-Objectif : faire de Tony l'orchestrateur et de trois agents spécialisés des exécutants autonomes, sans casser le moteur vocal ni le registre d'outils actuel.
+Tony est l'orchestrateur vocal. Les agents spécialisés exécutent les tâches longues en arrière-plan et utilisent le workspace du projet actif.
+
+## État actuel
+
+- **AgentManager** : opérationnel, asynchrone, suivi de statut/progression et annulation.
+- **Elio** : première boucle autonome opérationnelle pour les tâches de code dans un workspace.
+- **Lavanda** : contrat enregistré, moteur web à brancher.
+- **Clover** : contrat enregistré, moteur fichiers/bureautique à brancher.
+- **ProjectStore** : opérationnel et persistant.
 
 ## Agents
 
 ### Elio — code
 
-Responsable des tâches de développement longues : inspecter un dépôt, modifier le code, lancer les tests, analyser les erreurs, corriger et recommencer jusqu'à un critère de réussite explicite.
+Elio inspecte un workspace, lit et modifie les fichiers, exécute des commandes de développement autorisées, analyse leurs sorties et recommence jusqu'à un critère de réussite explicite ou une limite d'étapes.
 
-Le modèle de raisonnement peut être plus lourd que celui de Tony. Il ne doit pas bloquer la boucle vocale principale. Un candidat pour les tâches longues est `openai/gpt-oss-120b` via NVIDIA, à valider selon disponibilité et quotas.
+Le modèle utilisé est celui du provider courant de Tony dans cette première version. L'architecture permet ensuite de donner à Elio un modèle dédié plus lourd, par exemple `openai/gpt-oss-120b` via NVIDIA, sans ralentir Tony.
 
 ### Lavanda — web
 
-Responsable de la recherche internet : chercher, recouper, extraire les faits, conserver les sources et produire un résultat exploitable par Tony ou Elio.
-
-Elle doit distinguer clairement faits, hypothèses et résultats non vérifiés.
+Responsable de la recherche internet : chercher, recouper, conserver les sources et produire un résultat exploitable par Tony ou Elio. Le contrat est enregistré ; le moteur web est la prochaine implémentation.
 
 ### Clover — fichiers
 
-Responsable des fichiers locaux : Word, PDF, texte, dossiers et exports. Elle travaille dans un espace de travail explicite et ne doit pas modifier un fichier arbitrairement hors du périmètre demandé.
+Responsable des fichiers locaux : Word, PDF, texte, dossiers et exports. Elle travaillera dans un workspace explicite et ne modifiera pas arbitrairement des fichiers hors périmètre.
 
-## Contrat commun d'un agent
+## Contrat commun
 
-Chaque agent reçoit une tâche structurée :
+Chaque tâche reçoit :
 
 ```json
 {
@@ -33,38 +39,24 @@ Chaque agent reçoit une tâche structurée :
   "workspace": "...",
   "contraintes": [],
   "critere_succes": "...",
-  "deadline": null,
-  "max_duration_seconds": 1800
+  "deadline": null
 }
 ```
 
-Et produit des événements structurés :
-
-```json
-{
-  "task_id": "task-...",
-  "status": "queued|running|waiting|verifying|success|failed|cancelled",
-  "message": "...",
-  "artifacts": [],
-  "tests": [],
-  "next_action": "..."
-}
-```
+Et expose : `queued`, `running`, `success`, `failed`, `cancelled`, ainsi qu'une progression lisible.
 
 ## Orchestrateur Tony
 
-Tony ne fait pas lui-même une tâche longue. Il :
+Tony :
 
 1. comprend l'objectif ;
 2. choisit l'agent ;
-3. crée ou ouvre le workspace ;
-4. lance l'agent en arrière-plan ;
-5. annonce brièvement le démarrage ;
-6. reste disponible pour les autres demandes ;
-7. expose l'état et le résultat sur demande ;
-8. demande une confirmation avant toute action sensible ou irréversible.
-
-Les tâches sont exécutées hors de la boucle vocale. Un agent peut donc travailler pendant plusieurs minutes pendant que Tony continue à répondre normalement.
+3. utilise le projet actif comme workspace par défaut ;
+4. lance la tâche en arrière-plan ;
+5. reste disponible ;
+6. consulte le statut sur demande ;
+7. peut annuler une tâche ;
+8. annonce le résultat final.
 
 ```text
                      TONY
@@ -83,20 +75,13 @@ Les tâches sont exécutées hors de la boucle vocale. Un agent peut donc travai
              dossiers réels sur disque
 ```
 
-## Mode Projet
-
-Un projet est un dossier réel dans un répertoire racine configuré. Le graphe visuel du Holo est une représentation de ces projets, pas une seconde base de données : chaque nœud pointe vers un dossier existant.
-
-Les agents doivent travailler dans le dossier du projet sélectionné et conserver leurs artefacts, logs et rapports dans un sous-dossier dédié.
-
-Voir `docs/mode-projet.md` pour le format du workspace et du graphe.
-
-## Règles de sécurité
+## Sécurité
 
 - aucun agent ne reçoit les secrets globaux sans nécessité ;
-- workspace explicite pour toute modification de fichiers ;
-- commandes potentiellement destructrices soumises à confirmation ;
-- Elio doit tester avant de déclarer une tâche de code réussie ;
-- Lavanda conserve les URL des sources utilisées ;
-- Clover conserve les fichiers produits et leur chemin exact ;
-- Tony reste disponible pendant qu'un agent travaille.
+- workspace explicite pour les modifications ;
+- les commandes destructrices restent protégées ;
+- Elio ne peut pas sortir de son workspace ;
+- Elio ne peut pas effectuer `git push`, `git reset --hard` ou `git clean` via son terminal ;
+- Tony reste disponible pendant les tâches longues.
+
+Voir `docs/mode-projet.md` pour le workspace et le graphe.
