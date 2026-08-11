@@ -1,17 +1,8 @@
 """Abstraction du modele de langage : le reste du code ignore quel provider tourne.
 
-Providers disponibles via config.yaml :
-  - ClaudeProvider : API Anthropic (cloud).
-  - OllamaProvider : Ollama en local (http://localhost:11434), 100% offline.
-  - NvidiaProvider : modeles NVIDIA NIM via API OpenAI-compatible.
-
-Les trois exposent la meme methode `repondre(systeme, historique, outils)` et
-renvoient un objet a la forme d'une reponse Anthropic (.stop_reason + .content,
-chaque bloc ayant .type / .text / .name / .input / .id). Ainsi la boucle de
-dialogue et les outils de Jarvis restent independants du provider.
-
-L'historique interne reste au format "content blocks" d'Anthropic. Les providers
-OpenAI-compatible (Ollama et NVIDIA) effectuent leur traduction en interne.
+Providers disponibles via config.yaml : Claude, Ollama et NVIDIA NIM.
+Les providers exposent la meme methode `repondre(systeme, historique, outils)` et
+retournent un format interne compatible avec la boucle de dialogue.
 """
 import json
 import logging
@@ -104,26 +95,49 @@ class _OpenAICompatibleMixin:
                     typ = item.get("type")
                     if typ == "text":
                         text_parts.append(item.get("text", ""))
-                    elif typ == "image":
-                        if vision:
-                            part = self._image_part(item)
-                            if part:
-                                image_parts.append(part)
+                    elif typ == "image" and vision:
+                        part = self._image_part(item)
+                        if part:
+                            image_parts.append(part)
                     elif typ == "tool_result":
                         tool_results.append(item)
 
+                # Un tool_result doit rester un message role=tool pour respecter
+                # le protocole OpenAI. Si le resultat contient une image, on la
+                # repasse ensuite dans un message user multimodal : auparavant
+                # l'image etait transformee en texte et le VLM ne la voyait jamais.
                 for result in tool_results:
                     value = result.get("content", "")
+                    result_images = []
                     if isinstance(value, list):
-                        value = " ".join(
-                            str(x.get("text", "")) for x in value
-                            if isinstance(x, dict) and x.get("type") == "text"
-                        )
+                        text_values = []
+                        for x in value:
+                            if isinstance(x, dict) and x.get("type") == "text":
+                                text_values.append(str(x.get("text", "")))
+                            elif isinstance(x, dict) and x.get("type") == "image" and vision:
+                                part = self._image_part(x)
+                                if part:
+                                    result_images.append(part)
+                        value = " ".join(text_values)
+                    elif isinstance(value, dict) and value.get("image") and vision:
+                        part = self._image_part({"source": value["image"]})
+                        if part:
+                            result_images.append(part)
+                        value = value.get("apercu", "Image fournie au modele vision.")
+
                     messages.append({
                         "role": "tool",
                         "tool_call_id": result.get("tool_use_id", ""),
                         "content": str(value),
                     })
+                    if result_images:
+                        messages.append({
+                            "role": "user",
+                            "content": [
+                                {"type": "text", "text": "Voici l'image produite par l'outil. Analyse-la directement et reponds a la demande de l'utilisateur. Ne decris jamais une erreur ou un contenu que tu ne vois pas dans cette image."},
+                                *result_images,
+                            ],
+                        })
 
                 if text_parts or image_parts:
                     if image_parts:
@@ -219,14 +233,8 @@ class _OpenAICompatibleMixin:
                     args = json.loads(args)
                 except json.JSONDecodeError as e:
                     raise RuntimeError(f"Arguments d'outil invalides : {e}") from e
-            blocs.append(
-                Bloc(
-                    "tool_use",
-                    id=getattr(tc, "id", None),
-                    name=getattr(fn, "name", None),
-                    input=args or {},
-                )
-            )
+            blocs.append(Bloc("tool_use", id=getattr(tc, "id", None),
+                              name=getattr(fn, "name", None), input=args or {}))
 
         finish = getattr(choices[0], "finish_reason", None)
         stop = "tool_use" if any(b.type == "tool_use" for b in blocs) else finish or "end"
@@ -270,24 +278,16 @@ class OllamaProvider(_OpenAICompatibleMixin, ProviderLLM):
                 if isinstance(contenu, str):
                     messages.append({"role": "assistant", "content": contenu})
                 else:
-                    texte = " ".join(
-                        b.text for b in (contenu or [])
-                        if getattr(b, "type", None) == "text" and b.text
-                    )
+                    texte = " ".join(b.text for b in (contenu or [])
+                                     if getattr(b, "type", None) == "text" and b.text)
                     appels = [b for b in (contenu or []) if getattr(b, "type", None) == "tool_use"]
                     msg = {"role": "assistant", "content": texte}
                     if appels:
-                        msg["tool_calls"] = [
-                            {
-                                "id": b.id or f"call_{i}",
-                                "type": "function",
-                                "function": {
-                                    "name": b.name,
-                                    "arguments": b.input or {},
-                                },
-                            }
-                            for i, b in enumerate(appels)
-                        ]
+                        msg["tool_calls"] = [{
+                            "id": b.id or f"call_{i}",
+                            "type": "function",
+                            "function": {"name": b.name, "arguments": b.input or {}},
+                        } for i, b in enumerate(appels)]
                     messages.append(msg)
         return messages
 
@@ -296,16 +296,10 @@ class OllamaProvider(_OpenAICompatibleMixin, ProviderLLM):
         if nudge:
             messages = messages + [{"role": "user", "content": nudge}]
         r = requests.post(
-            f"{self.hote}/api/chat",
-            timeout=120,
-            json={
-                "model": self.modele,
-                "messages": messages,
-                "tools": tools,
-                "stream": False,
-                "think": bool(reglage("ollama.think", False)),
-                "options": {"temperature": 0.3},
-            },
+            f"{self.hote}/api/chat", timeout=120,
+            json={"model": self.modele, "messages": messages, "tools": tools,
+                  "stream": False, "think": bool(reglage("ollama.think", False)),
+                  "options": {"temperature": 0.3}},
         )
         r.raise_for_status()
         return r.json()
@@ -321,14 +315,8 @@ class OllamaProvider(_OpenAICompatibleMixin, ProviderLLM):
             args = fn.get("arguments", {})
             if isinstance(args, str):
                 args = json.loads(args)
-            blocs.append(
-                Bloc(
-                    "tool_use",
-                    id=tc.get("id") or f"call_{i}",
-                    name=fn.get("name"),
-                    input=args or {},
-                )
-            )
+            blocs.append(Bloc("tool_use", id=tc.get("id") or f"call_{i}",
+                              name=fn.get("name"), input=args or {}))
         stop = "tool_use" if any(b.type == "tool_use" for b in blocs) else "end"
         return Reponse(stop, blocs)
 
@@ -339,101 +327,80 @@ class OllamaProvider(_OpenAICompatibleMixin, ProviderLLM):
             return self._parser_ollama(self._chat(messages, tools))
         except Exception as e:
             LOG.warning("ollama: 1er essai en echec (%s), retry plus directif", e)
-            nudge = (
-                "Rappel : pour agir, appelle l'outil approprie via un tool call "
-                "avec des arguments JSON valides ; sinon reponds simplement en texte."
-            )
             try:
-                return self._parser_ollama(self._chat(messages, tools, nudge=nudge))
+                return self._parser_ollama(self._chat(messages, tools,
+                    nudge="Rappel : appelle l'outil approprie via un tool call JSON valide ; sinon reponds simplement."))
             except Exception:
                 LOG.exception("ollama: echec apres retry")
-                return Reponse(
-                    "end",
-                    [Bloc("text", text=(
-                        "Desole, le modele local n'a pas reussi a traiter la demande "
-                        "correctement. Reessaie en reformulant, ou repasse en mode cloud."
-                    ))],
-                )
+                return Reponse("end", [Bloc("text", text=(
+                    "Desole, le modele local n'a pas reussi a traiter la demande correctement."))])
 
 
 class NvidiaProvider(_OpenAICompatibleMixin, ProviderLLM):
-    """Modeles NVIDIA NIM via l'API OpenAI-compatible.
-
-    Par defaut, Tony utilise openai/gpt-oss-120b. Le modele est configurable
-    pour pouvoir tester d'autres modeles NVIDIA sans changer le code.
-    """
-
+    """Modeles NVIDIA NIM via l'API OpenAI-compatible."""
     nom = "NVIDIA"
 
     def __init__(self):
         from openai import OpenAI
-
         cle = os.getenv("NVIDIA_API_KEY") or reglage("nvidia.cle", "")
-        self.modele = reglage("nvidia.modele", "openai/gpt-oss-120b")
-        self.base_url = reglage(
-            "nvidia.base_url",
-            "https://integrate.api.nvidia.com/v1",
-        ).rstrip("/")
-        # GPT-OSS est un modele de raisonnement. "low" est le bon defaut pour
-        # un assistant vocal : moins de latence, tout en gardant raisonnement
-        # et tool calling. NVIDIA documente low/medium/high pour GPT-OSS.
+        self.modele = reglage("nvidia.modele", "meta/llama-3.1-8b-instruct")
+        self.modele_vision = reglage("nvidia.vision_modele", "nvidia/nemotron-nano-12b-v2-vl")
+        self.base_url = reglage("nvidia.base_url", "https://integrate.api.nvidia.com/v1").rstrip("/")
         self.reasoning_effort = reglage("nvidia.reasoning_effort", "low")
         self.max_tokens = int(reglage("nvidia.max_tokens", 1024))
         self.temperature = float(reglage("nvidia.temperature", 0.3))
-        self.client = (
-            OpenAI(api_key=cle, base_url=self.base_url, timeout=90.0)
-            if cle
-            else None
-        )
+        self.client = OpenAI(api_key=cle, base_url=self.base_url, timeout=90.0) if cle else None
 
     def disponible(self):
         return self.client is not None
 
-    def _chat(self, messages, tools):
+    @staticmethod
+    def _contient_image(messages):
+        for message in messages:
+            content = message.get("content")
+            if isinstance(content, list) and any(
+                isinstance(part, dict) and part.get("type") == "image_url"
+                for part in content
+            ):
+                return True
+        return False
+
+    def _chat(self, messages, tools, vision=False):
         kwargs = {
-            "model": self.modele,
+            "model": self.modele_vision if vision else self.modele,
             "messages": messages,
             "max_tokens": self.max_tokens,
             "temperature": self.temperature,
             "stream": False,
         }
-
-        if tools:
+        # Apres une capture, on veut une lecture visuelle et non un second appel
+        # a capture_screen. Nemotron VL reste capable de function calling quand
+        # Tony doit vraiment agir depuis une image, mais ici la boucle vient deja
+        # d'executer l'outil de capture.
+        if tools and not vision:
             kwargs["tools"] = tools
             kwargs["tool_choice"] = "auto"
-
-        if self.reasoning_effort:
-            kwargs["reasoning_effort"] = self.reasoning_effort
-
         return self.client.chat.completions.create(**kwargs)
 
     def repondre(self, systeme, historique, outils):
         if not self.client:
-            return Reponse(
-                "end",
-                [Bloc("text", text=(
-                    "NVIDIA n'est pas configure. Definis NVIDIA_API_KEY dans "
-                    "l'environnement ou nvidia.cle dans config.yaml."
-                ))],
-            )
-
+            return Reponse("end", [Bloc("text", text="NVIDIA n'est pas configure.")])
         messages = self._traduire(systeme, historique, vision=True)
+        vision = self._contient_image(messages)
+        if vision:
+            messages[0]["content"] += "\nTu as recu une vraie image. Analyse uniquement ce que tu vois. Si un element est illisible, dis-le. N'invente jamais le contenu de l'image."
         tools = self._outils(outils)
         try:
-            return self._parser(self._chat(messages, tools))
+            return self._parser(self._chat(messages, tools, vision=vision))
         except Exception as e:
             LOG.exception("nvidia: appel NVIDIA echoue")
-            return Reponse(
-                "end",
-                [Bloc("text", text=f"Erreur NVIDIA : {e}")],
-            )
+            return Reponse("end", [Bloc("text", text=f"Erreur NVIDIA : {e}")])
 
 
 _LLM = None
 
 
 def llm():
-    """Provider LLM courant (mode: cloud | local | nvidia)."""
     global _LLM
     if _LLM is None:
         mode = (reglage("mode", "cloud") or "cloud").lower()
@@ -443,5 +410,4 @@ def llm():
             _LLM = NvidiaProvider()
         else:
             _LLM = ClaudeProvider()
-        LOG.info("provider LLM : %s", _LLM.nom)
     return _LLM
