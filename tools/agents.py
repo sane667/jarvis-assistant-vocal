@@ -3,9 +3,7 @@ from core.registre import outil
 from core.agent_manager import manager
 from core.project_store import store
 
-# Register built-in agents when the tool module is auto-discovered.
-# Imports are deliberately local to avoid making core.agent_manager depend on
-# concrete agents.
+
 def _register_agents():
     from agents.elio import register as register_elio
     from agents.lavanda import register as register_lavanda
@@ -28,6 +26,16 @@ def _workspace(explicit: str | None = None) -> str:
     return project.path
 
 
+def _dashboard(task, message=""):
+    try:
+        import project_hud
+        project_hud.agent(task)
+        if message:
+            project_hud.activite(message)
+    except Exception:
+        pass
+
+
 @outil(
     "lancer_agent",
     "Délègue une tâche longue à un agent spécialisé. Utilise Elio pour le code, Lavanda pour la recherche web et Clover pour les fichiers/bureautique.",
@@ -42,13 +50,9 @@ def _workspace(explicit: str | None = None) -> str:
 )
 def lancer_agent(agent: str, objectif: str, contexte: str = "", critere_succes: str = "", workspace: str = ""):
     try:
-        task = manager().submit(
-            agent,
-            objectif,
-            _workspace(workspace or None),
-            contexte=contexte,
-            critere_succes=critere_succes,
-        )
+        task = manager().submit(agent, objectif, _workspace(workspace or None),
+                                contexte=contexte, critere_succes=critere_succes)
+        _dashboard(task, f"{task.agent} lancé : {objectif}")
         return f"Tâche {task.id} confiée à {task.agent}. Elle continue en arrière-plan."
     except Exception as exc:
         return f"Impossible de lancer l'agent : {exc}"
@@ -57,34 +61,33 @@ def lancer_agent(agent: str, objectif: str, contexte: str = "", critere_succes: 
 @outil(
     "statut_agent",
     "Donne l'état d'une tâche déléguée ou des tâches en cours.",
-    {"type": "object", "properties": {
-        "task_id": {"type": "string", "description": "Identifiant de tâche facultatif"},
-    }},
+    {"type": "object", "properties": {"task_id": {"type": "string", "description": "Identifiant de tâche facultatif"}}},
 )
 def statut_agent(task_id: str = ""):
     if task_id:
         task = manager().get(task_id)
         if task is None:
             return f"Tâche inconnue : {task_id}"
+        _dashboard(task)
         return f"{task.id} — {task.agent} — {task.status}. {task.progress or task.message}"
     tasks = manager().list()
     if not tasks:
         return "Aucune tâche d'agent."
-    return " ; ".join(
-        f"{t.id} {t.agent}: {t.status}{' — ' + t.progress if t.progress else ''}"
-        for t in tasks[-8:]
-    )
+    for task in tasks[-8:]:
+        _dashboard(task)
+    return " ; ".join(f"{t.id} {t.agent}: {t.status}{' — ' + t.progress if t.progress else ''}" for t in tasks[-8:])
 
 
 @outil(
     "annuler_agent",
     "Annule une tâche d'agent en cours quand l'utilisateur le demande.",
-    {"type": "object", "properties": {
-        "task_id": {"type": "string", "description": "Identifiant de tâche"},
-    }, "required": ["task_id"]},
+    {"type": "object", "properties": {"task_id": {"type": "string", "description": "Identifiant de tâche"}}, "required": ["task_id"]},
     confirmation=True,
 )
 def annuler_agent(task_id: str):
     if manager().cancel(task_id):
+        task = manager().get(task_id)
+        if task:
+            _dashboard(task, f"Annulation demandée pour {task_id}.")
         return f"Annulation demandée pour {task_id}."
     return f"Tâche introuvable : {task_id}"
