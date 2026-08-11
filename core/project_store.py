@@ -1,9 +1,4 @@
-"""Filesystem-backed workspaces for Tony's Mode Projet.
-
-A project is a real directory on disk.  The .tony directory only stores
-metadata/graph state.  This module is intentionally independent from the LLM
-and tool registry so it can also be used by Elio, Lavanda and Clover.
-"""
+"""Filesystem-backed workspaces for Tony's Mode Projet."""
 from __future__ import annotations
 
 from dataclasses import dataclass, field, asdict
@@ -73,9 +68,7 @@ class ProjectStore:
     def _save_active(self) -> None:
         if self._active:
             self._active_file().write_text(
-                json.dumps({"slug": self._active}, ensure_ascii=False, indent=2),
-                encoding="utf-8",
-            )
+                json.dumps({"slug": self._active}, ensure_ascii=False, indent=2), encoding="utf-8")
         else:
             try:
                 self._active_file().unlink()
@@ -90,6 +83,15 @@ class ProjectStore:
     def _metadata_path(self, directory: Path) -> Path:
         return directory / ".tony" / "project.json"
 
+    def _publish(self, project: Project | None, message: str = "") -> None:
+        try:
+            import project_hud
+            project_hud.projet(project)
+            if message:
+                project_hud.activite(message)
+        except Exception:
+            pass
+
     def create(self, name: str, description: str = "") -> Project:
         name = name.strip()
         if not name:
@@ -98,22 +100,15 @@ class ProjectStore:
         directory = self._project_dir(slug)
         if directory.exists():
             raise FileExistsError(f"Projet déjà existant : {name}")
-
         for child in ("docs", "src", "assets", "output", "logs"):
             (directory / child).mkdir(parents=True, exist_ok=True)
         (directory / ".tony").mkdir(parents=True, exist_ok=True)
-
         now = datetime.now(timezone.utc).isoformat()
-        project = Project(
-            name=name,
-            slug=slug,
-            path=str(directory),
-            description=description.strip(),
-            created_at=now,
-            updated_at=now,
-        )
+        project = Project(name=name, slug=slug, path=str(directory),
+                          description=description.strip(), created_at=now, updated_at=now)
         project.nodes.append({"id": slug, "label": name, "type": "project"})
         self._write(project)
+        self._publish(project, f'Projet "{name}" créé.')
         return project
 
     def open(self, slug: str) -> Project:
@@ -138,6 +133,7 @@ class ProjectStore:
         project.updated_at = datetime.now(timezone.utc).isoformat()
         self._write(project)
         self._save_active()
+        self._publish(project, f'Projet "{project.name}" activé.')
         return project
 
     def deactivate(self) -> None:
@@ -147,9 +143,15 @@ class ProjectStore:
             project = self.open(self._active)
             project.active = False
             self._write(project)
+            self._publish(project, f'Projet "{project.name}" fermé.')
         finally:
             self._active = None
             self._save_active()
+            try:
+                import project_hud
+                project_hud.projet(None)
+            except Exception:
+                pass
 
     def list(self) -> list[Project]:
         projects: list[Project] = []
@@ -165,12 +167,16 @@ class ProjectStore:
         project.nodes.append(node)
         project.updated_at = datetime.now(timezone.utc).isoformat()
         self._write(project)
+        if project.active:
+            self._publish(project)
         return project
 
     def add_edge(self, project: Project, edge: dict[str, Any]) -> Project:
         project.edges.append(edge)
         project.updated_at = datetime.now(timezone.utc).isoformat()
         self._write(project)
+        if project.active:
+            self._publish(project)
         return project
 
     def _write(self, project: Project) -> None:
@@ -178,10 +184,7 @@ class ProjectStore:
         directory.relative_to(self.root)
         metadata = self._metadata_path(directory)
         metadata.parent.mkdir(parents=True, exist_ok=True)
-        metadata.write_text(
-            json.dumps(asdict(project), ensure_ascii=False, indent=2),
-            encoding="utf-8",
-        )
+        metadata.write_text(json.dumps(asdict(project), ensure_ascii=False, indent=2), encoding="utf-8")
 
 
 _ROOT = Path(__file__).resolve().parent.parent
@@ -190,28 +193,23 @@ _STORE: ProjectStore | None = None
 
 
 def store() -> ProjectStore:
-    """Return the process-wide project store used by Tony's tools."""
     global _STORE
     if _STORE is None:
-        configured = reglage("projets.racine", str(_DEFAULT_ROOT))
-        _STORE = ProjectStore(configured)
+        _STORE = ProjectStore(reglage("projets.racine", str(_DEFAULT_ROOT)))
     return _STORE
 
 
 def creer_projet(nom: str, description: str = "") -> str:
-    """Create a project workspace and return a concise result for Tony."""
     project = store().create(nom, description)
     return f'Projet "{project.name}" créé dans {project.path}.'
 
 
 def ouvrir_projet(nom: str) -> str:
-    """Open/activate a project for subsequent agent work."""
     project = store().activate(nom)
     return f'Projet "{project.name}" ouvert. Workspace : {project.path}'
 
 
 def fermer_projet() -> str:
-    """Close the current project without deleting anything."""
     project = store().active
     if project is None:
         return "Aucun projet n'est actuellement ouvert."
@@ -221,20 +219,15 @@ def fermer_projet() -> str:
 
 
 def lister_projets() -> str:
-    """List project names and mark the active project."""
     projects = store().list()
     if not projects:
         return "Aucun projet n'est créé."
     active = store().active_slug
-    lignes = [
-        f'- {p.name}{" (actif)" if p.slug == active else ""}'
-        for p in projects
-    ]
+    lignes = [f'- {p.name}{" (actif)" if p.slug == active else ""}' for p in projects]
     return "Projets : " + "; ".join(lignes)
 
 
 def projet_actif() -> str:
-    """Return the current project, if any."""
     project = store().active
     if project is None:
         return "Aucun projet n'est actuellement ouvert."
