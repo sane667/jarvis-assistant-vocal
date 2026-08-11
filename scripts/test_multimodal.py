@@ -5,7 +5,7 @@ Run: uv run python scripts/test_multimodal.py
 from core import registre
 
 registre.charger_outils()
-noms = set(registre.noms())
+noms = {o.nom for o in registre.tous()}
 required = {"capture_screen", "generer_image", "creer_projet", "lancer_agent"}
 missing = required - noms
 if missing:
