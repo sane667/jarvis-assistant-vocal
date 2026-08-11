@@ -1,22 +1,20 @@
 # Configuration de Tony — copie ce fichier en config.yaml et mets tes valeurs.
 # config.yaml n'est PAS versionne (voir .gitignore) : tes secrets restent chez toi.
 
-mode: cloud                    # cloud = Claude ; local = Ollama ; nvidia = NVIDIA NIM
+mode: cloud
 ollama:
   hote: "http://localhost:11434"
   modele: "qwen3.5:4b"
   think: false
-
 nvidia:
-  cle: ""                     # recommande : variable d'environnement NVIDIA_API_KEY
+  cle: ""
   modele: "meta/llama-3.1-8b-instruct"
   vision_modele: "nvidia/nemotron-nano-12b-v2-vl"
   image_modele: "black-forest-labs/flux.2-klein-4b"
   base_url: "https://integrate.api.nvidia.com/v1"
-  reasoning_effort: ""        # vide = pas de parametre de raisonnement
+  reasoning_effort: ""
   max_tokens: 512
   temperature: 0.2
-
 voix_locale: piper
 piper:
   modele: ""
@@ -54,7 +52,7 @@ assistant:
   personnalite: "jarvis_sarcastique"
 projets:
   racine: "projets"
-  dashboard_auto_ouvrir: false
+  dashboard_auto_ouvrir: true
 obs:
   host: "localhost"
   port: 4455
