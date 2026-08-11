@@ -27,7 +27,6 @@ def _workspace(explicit: str | None = None) -> str:
 
 
 def _context_with_project(contexte: str) -> str:
-    """Keep the active project's brief attached to every delegated task."""
     project = store().active
     if project is None:
         return contexte
@@ -42,7 +41,7 @@ def _workspace_hint(agent: str) -> str:
     roles = {
         "elio": "Elio : développement, code, tests, débogage et architecture.",
         "lavanda": "Lavanda : recherche Internet, collecte de sources et synthèse web.",
-        "clover": "Clover : fichiers locaux, PDF, images, documents et organisation bureautique.",
+        "clover": "Clover : fichiers locaux, PDF, images, documents et organisation bureautique. Elle ne supprime jamais de fichier.",
     }
     return roles.get(agent.lower(), "")
 
@@ -63,26 +62,37 @@ def _dashboard(task, message=""):
         "Délègue une tâche longue à un agent spécialisé. Elio = code/tests/debug, "
         "Lavanda = Internet/recherche/sources, Clover = fichiers locaux/PDF/images/documents. "
         "Dans un projet actif, le brief du projet est automatiquement transmis à l'agent. "
-        "Choisis l'agent correspondant réellement à la nature de la tâche et ne lance pas "
-        "deux agents redondants sans raison."
+        "Choisis l'agent correspondant réellement à la nature de la tâche. IMPORTANT : "
+        "pour Clover, workspace est obligatoire et doit être un repertoire explicitement "
+        "donne par l'utilisateur. L'appel Clover est d'abord mis en attente et nécessite "
+        "ensuite l'outil confirmer_clover ; aucune operation fichier ne part avant cette confirmation."
     ),
     {"type": "object", "properties": {
         "agent": {"type": "string", "enum": ["elio", "lavanda", "clover"]},
         "objectif": {"type": "string", "description": "Travail précis à accomplir"},
         "contexte": {"type": "string", "description": "Contexte utile; le brief du projet actif est ajouté automatiquement"},
         "critere_succes": {"type": "string", "description": "Comment savoir que la tâche est terminée"},
-        "workspace": {"type": "string", "description": "Dossier de travail facultatif"},
+        "workspace": {"type": "string", "description": "Pour Clover : repertoire local explicitement confirme par l'utilisateur. Pour les autres agents : dossier de travail facultatif."},
     }, "required": ["agent", "objectif"]},
     lent=False,
 )
 def lancer_agent(agent: str, objectif: str, contexte: str = "", critere_succes: str = "", workspace: str = ""):
     try:
+        name = agent.lower().strip()
         contexte_final = _context_with_project(contexte)
-        role = _workspace_hint(agent)
+        role = _workspace_hint(name)
         if role:
             contexte_final = f"{role}\n{contexte_final}" if contexte_final else role
+
+        if name == "clover":
+            if not workspace.strip():
+                return "Clover a besoin du repertoire exact dans lequel elle doit travailler. Aucun fichier n'a ete touche. Donne-moi le chemin du dossier, puis je te demanderai confirmation avant d'agir."
+            from agents.clover import request_confirmation
+            token = request_confirmation(objectif, workspace, contexte_final)
+            return f"Clover est prete pour le repertoire {workspace}, mais aucune operation n'est encore executee. Confirmation requise : utilise confirmer_clover avec le jeton {token} apres accord explicite de l'utilisateur."
+
         task = manager().submit(
-            agent,
+            name,
             objectif,
             _workspace(workspace or None),
             contexte=contexte_final,
@@ -92,6 +102,34 @@ def lancer_agent(agent: str, objectif: str, contexte: str = "", critere_succes: 
         return f"Tâche {task.id} confiée à {task.agent}. Elle continue en arrière-plan."
     except Exception as exc:
         return f"Impossible de lancer l'agent : {exc}"
+
+
+@outil(
+    "confirmer_clover",
+    (
+        "Confirme et lance la dernière tâche Clover en attente. A utiliser uniquement "
+        "apres que l'utilisateur a explicitement confirme le repertoire et l'operation. "
+        "Clover ne supprime jamais : les suppressions sont traitees comme une mise en quarantaine."
+    ),
+    {"type": "object", "properties": {
+        "token": {"type": "string", "description": "Jeton clover-N fourni par lancer_agent"}
+    }, "required": ["token"]},
+    confirmation=True,
+)
+def confirmer_clover(token: str):
+    try:
+        from agents.clover import consume
+        pending = consume(token)
+        task = manager().submit(
+            "clover",
+            pending["objectif"],
+            pending["workspace"],
+            contexte=pending.get("contexte", ""),
+        )
+        _dashboard(task, f"Clover confirmée sur {pending['workspace']} : {pending['objectif']}")
+        return f"Clover est lancée sur {pending['workspace']} avec la tâche {task.id}. Aucune suppression définitive n'est autorisée."
+    except Exception as exc:
+        return f"Impossible de confirmer Clover : {exc}"
 
 
 @outil(
