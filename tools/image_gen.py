@@ -1,8 +1,4 @@
-"""Generation d'images NVIDIA pour Tony.
-
-Utilise l'API OpenAI-compatible Visual GenAI de NVIDIA et FLUX.2 Klein 4B.
-L'image est sauvegardee dans le workspace du projet actif quand il existe,
-sinon dans generated/."""
+"""Generation d'images NVIDIA pour Tony."""
 from __future__ import annotations
 
 import base64
@@ -11,7 +7,6 @@ from pathlib import Path
 
 from core.config import reglage
 from core.registre import outil
-
 
 MODEL = "black-forest-labs/flux.2-klein-4b"
 
@@ -84,14 +79,10 @@ def generer_image(prompt: str, nom_fichier: str = "") -> str:
         output.write_bytes(data)
 
         try:
-            from core import hud
+            import hud
+            hud.image_gen(str(output), prompt)
         except Exception:
-            hud = None
-        if hud is not None:
-            try:
-                hud.image_gen(str(output), prompt)
-            except Exception:
-                pass
+            pass
         return f'Image generee avec {model} : {output}'
     except Exception as exc:
         return f"Generation d'image NVIDIA echouee : {type(exc).__name__}: {exc}"
