@@ -1,0 +1,75 @@
+"""Tony tools for delegating and supervising background agents."""
+from core.registre import outil
+from core.agent_manager import manager
+from core.project_store import store
+
+
+def _workspace(explicit: str | None = None) -> str:
+    if explicit:
+        return explicit
+    project = store().active
+    if project is None:
+        raise RuntimeError("Aucun projet actif. Ouvre un projet avant de déléguer une tâche.")
+    return project.path
+
+
+@outil(
+    "lancer_agent",
+    "Délègue une tâche longue à un agent spécialisé. Utilise Elio pour le code, Lavanda pour la recherche web et Clover pour les fichiers/bureautique.",
+    {"type": "object", "properties": {
+        "agent": {"type": "string", "enum": ["elio", "lavanda", "clover"]},
+        "objectif": {"type": "string", "description": "Travail précis à accomplir"},
+        "contexte": {"type": "string", "description": "Contexte utile"},
+        "critere_succes": {"type": "string", "description": "Comment savoir que la tâche est terminée"},
+        "workspace": {"type": "string", "description": "Dossier de travail facultatif"},
+    }, "required": ["agent", "objectif"]},
+    lent=False,
+)
+def lancer_agent(agent: str, objectif: str, contexte: str = "", critere_succes: str = "", workspace: str = ""):
+    try:
+        task = manager().submit(
+            agent,
+            objectif,
+            _workspace(workspace or None),
+            contexte=contexte,
+            critere_succes=critere_succes,
+        )
+        return f"Tâche {task.id} confiée à {task.agent}. Elle continue en arrière-plan."
+    except Exception as exc:
+        return f"Impossible de lancer l'agent : {exc}"
+
+
+@outil(
+    "statut_agent",
+    "Donne l'état d'une tâche déléguée ou des tâches en cours.",
+    {"type": "object", "properties": {
+        "task_id": {"type": "string", "description": "Identifiant de tâche facultatif"},
+    }},
+)
+def statut_agent(task_id: str = ""):
+    if task_id:
+        task = manager().get(task_id)
+        if task is None:
+            return f"Tâche inconnue : {task_id}"
+        return f"{task.id} — {task.agent} — {task.status}. {task.progress or task.message}"
+    tasks = manager().list()
+    if not tasks:
+        return "Aucune tâche d'agent."
+    return " ; ".join(
+        f"{t.id} {t.agent}: {t.status}{' — ' + t.progress if t.progress else ''}"
+        for t in tasks[-8:]
+    )
+
+
+@outil(
+    "annuler_agent",
+    "Annule une tâche d'agent en cours quand l'utilisateur le demande.",
+    {"type": "object", "properties": {
+        "task_id": {"type": "string", "description": "Identifiant de tâche"},
+    }, "required": ["task_id"]},
+    confirmation=True,
+)
+def annuler_agent(task_id: str):
+    if manager().cancel(task_id):
+        return f"Annulation demandée pour {task_id}."
+    return f"Tâche introuvable : {task_id}"
