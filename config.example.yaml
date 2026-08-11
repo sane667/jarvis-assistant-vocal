@@ -1,4 +1,4 @@
-# Configuration de Jarvis — copie ce fichier en config.yaml et mets tes valeurs.
+# Configuration de Tony — copie ce fichier en config.yaml et mets tes valeurs.
 # config.yaml n'est PAS versionne (voir .gitignore) : tes secrets restent chez toi.
 
 mode: cloud                    # cloud = Claude ; local = Ollama ; nvidia = NVIDIA NIM
@@ -53,7 +53,7 @@ interruption:
 assistant:
   duree_suite: 10
   piece_nuit: "chambre"
-  personnalite: "jarvis_sarcastique"
+  personnalite: "jarvis_sarcastique"  # profil historique ; alias Tony a conserver jusqu'au refactor des presets
 obs:
   host: "localhost"
   port: 4455
