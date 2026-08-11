@@ -26,6 +26,27 @@ def _workspace(explicit: str | None = None) -> str:
     return project.path
 
 
+def _context_with_project(contexte: str) -> str:
+    """Keep the active project's brief attached to every delegated task."""
+    project = store().active
+    if project is None:
+        return contexte
+    brief = project.description.strip()
+    if not brief:
+        return contexte
+    prefix = f'Contexte durable du projet "{project.name}" : {brief}'
+    return f"{prefix}\n{contexte}" if contexte.strip() else prefix
+
+
+def _workspace_hint(agent: str) -> str:
+    roles = {
+        "elio": "Elio : développement, code, tests, débogage et architecture.",
+        "lavanda": "Lavanda : recherche Internet, collecte de sources et synthèse web.",
+        "clover": "Clover : fichiers locaux, PDF, images, documents et organisation bureautique.",
+    }
+    return roles.get(agent.lower(), "")
+
+
 def _dashboard(task, message=""):
     try:
         import project_hud
@@ -38,11 +59,17 @@ def _dashboard(task, message=""):
 
 @outil(
     "lancer_agent",
-    "Délègue une tâche longue à un agent spécialisé. Utilise Elio pour le code, Lavanda pour la recherche web et Clover pour les fichiers/bureautique.",
+    (
+        "Délègue une tâche longue à un agent spécialisé. Elio = code/tests/debug, "
+        "Lavanda = Internet/recherche/sources, Clover = fichiers locaux/PDF/images/documents. "
+        "Dans un projet actif, le brief du projet est automatiquement transmis à l'agent. "
+        "Choisis l'agent correspondant réellement à la nature de la tâche et ne lance pas "
+        "deux agents redondants sans raison."
+    ),
     {"type": "object", "properties": {
         "agent": {"type": "string", "enum": ["elio", "lavanda", "clover"]},
         "objectif": {"type": "string", "description": "Travail précis à accomplir"},
-        "contexte": {"type": "string", "description": "Contexte utile"},
+        "contexte": {"type": "string", "description": "Contexte utile; le brief du projet actif est ajouté automatiquement"},
         "critere_succes": {"type": "string", "description": "Comment savoir que la tâche est terminée"},
         "workspace": {"type": "string", "description": "Dossier de travail facultatif"},
     }, "required": ["agent", "objectif"]},
@@ -50,8 +77,17 @@ def _dashboard(task, message=""):
 )
 def lancer_agent(agent: str, objectif: str, contexte: str = "", critere_succes: str = "", workspace: str = ""):
     try:
-        task = manager().submit(agent, objectif, _workspace(workspace or None),
-                                contexte=contexte, critere_succes=critere_succes)
+        contexte_final = _context_with_project(contexte)
+        role = _workspace_hint(agent)
+        if role:
+            contexte_final = f"{role}\n{contexte_final}" if contexte_final else role
+        task = manager().submit(
+            agent,
+            objectif,
+            _workspace(workspace or None),
+            contexte=contexte_final,
+            critere_succes=critere_succes,
+        )
         _dashboard(task, f"{task.agent} lancé : {objectif}")
         return f"Tâche {task.id} confiée à {task.agent}. Elle continue en arrière-plan."
     except Exception as exc:
