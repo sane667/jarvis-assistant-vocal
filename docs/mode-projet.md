@@ -16,61 +16,69 @@ projets/
     └── logs/
 ```
 
-`project.json` contient uniquement les métadonnées du projet : nom, description, dates, statut, nœuds et relations du graphe, agent courant et tâches en cours. Les fichiers réels restent des fichiers normaux.
+`project.json` contient les métadonnées du projet et les nœuds/arêtes du graphe. Les fichiers réels restent des fichiers normaux.
+
+Le répertoire racine est configurable avec `projets.racine` dans `config.yaml`. Par défaut, Tony utilise `projets/` à la racine du dépôt.
+
+## Outils Tony disponibles
+
+Les cinq opérations de base sont maintenant de vrais tools du registre :
+
+- `creer_projet(nom, description?)`
+- `ouvrir_projet(nom)`
+- `fermer_projet()`
+- `lister_projets()`
+- `projet_actif()`
+
+Le projet actif est mémorisé dans `projets/.tony-active.json`, ce qui permet de le retrouver après un redémarrage. Un seul projet est actif à la fois.
 
 ## Graphe
 
-Un nœud peut représenter :
+Un nœud peut représenter le projet, un dossier, un fichier, une tâche, un agent ou une ressource externe. Une arête représente par exemple `contains`, `depends_on`, `produces`, `assigned_to` ou `references`.
 
-- le projet ;
-- un dossier ;
-- un fichier ;
-- une tâche ;
-- un agent ;
-- une ressource externe.
+Le graphe ne doit jamais devenir une source de vérité séparée des fichiers : Holo reconstruit progressivement sa vue à partir du workspace et des métadonnées `.tony`.
 
-Une arête représente une relation explicite : `contains`, `depends_on`, `produces`, `assigned_to`, `references`.
+## Agents
 
-Le graphe doit être reconstructible à partir du workspace. Il ne doit jamais devenir une source de vérité séparée des fichiers.
+Tony dispose maintenant d'un `AgentManager` asynchrone partagé :
 
-## Projet actif
-
-Tony conserve un seul projet actif à la fois pour les commandes ambiguës. Il doit annoncer le changement : « Projet Holo activé. »
-
-Les agents reçoivent toujours le chemin absolu du workspace et un sous-ensemble explicite des permissions dont ils ont besoin.
-
-## Contrat agent
-
-Chaque tâche déléguée possède :
-
-```json
-{
-  "id": "uuid",
-  "project": "workspace",
-  "agent": "elio",
-  "goal": "objectif utilisateur",
-  "status": "queued|running|blocked|completed|failed|cancelled",
-  "created_at": "ISO-8601",
-  "deadline": "ISO-8601|null",
-  "max_duration_seconds": 1800,
-  "result": null
-}
+```text
+Tony
+  ↓
+lancer_agent
+  ↓
+AgentManager
+  ├── Elio    → code
+  ├── Lavanda → web
+  └── Clover  → fichiers
 ```
+
+Chaque tâche possède un identifiant, un workspace, un objectif, un statut, une progression, des dates de début/fin et un mécanisme d'annulation.
+
+`Elio` possède déjà une première boucle autonome : il inspecte le workspace, lit/écrit des fichiers et exécute des commandes de développement autorisées, puis recommence jusqu'à satisfaction ou limite d'étapes. Il reste strictement confiné au workspace et refuse les commandes destructrices évidentes.
+
+Lavanda et Clover sont actuellement des contrats d'agent enregistrés, prêts à recevoir respectivement le moteur web et le moteur bureautique/fichiers.
 
 ## Sécurité
 
-- Un agent ne sort jamais de son workspace sans permission explicite.
-- Les opérations destructrices restent soumises au système de confirmation existant.
-- Les secrets et fichiers de configuration utilisateur restent exclus du workspace agent par défaut.
-- Les logs d'agents doivent être séparés des logs conversationnels.
+- Un agent ne sort jamais de son workspace.
+- Les outils destructeurs de Tony gardent leur système de confirmation.
+- Elio ne peut pas utiliser `git push`, `git reset --hard` ou `git clean` via son outil terminal.
+- Les secrets du dépôt ne sont pas automatiquement injectés dans le contexte d'un agent.
+- Les tâches longues sont asynchrones : Tony reste disponible pendant leur exécution.
 
-## Roadmap d'implémentation
+## Smoke test
 
-1. `ProjectStore` : création, ouverture, fermeture et projet actif.
-2. `project.json` : métadonnées et graphe.
-3. Tools Tony : `creer_projet`, `ouvrir_projet`, `fermer_projet`, `lister_projets`, `projet_actif`.
-4. `AgentTask` et `AgentManager`.
-5. Elio.
-6. Lavanda.
-7. Clover.
-8. UI Holo du graphe et du panneau de tâches.
+```powershell
+uv run python scripts/test_project_agents.py
+```
+
+Ce test ne fait aucun appel LLM et ne crée aucun fichier permanent.
+
+## Prochaine étape
+
+1. Brancher le graphe Holo sur `ProjectStore`.
+2. Donner à Elio une meilleure mémoire de tâche et une vraie boucle test/review.
+3. Brancher Lavanda sur les outils web existants.
+4. Brancher Clover sur les outils fichiers/Word/PDF.
+5. Ajouter les événements d'agents au HUD/Holo.
