@@ -1,7 +1,8 @@
 """Tools for Tony's Mode Projet.
 
-These are intentionally simple and deterministic.  They are the bridge between
-natural-language intent and the filesystem-backed ProjectStore.
+The project tool deliberately asks for a short project brief before creating
+anything. This gives Tony and his agents a durable context instead of a bare
+folder name.
 """
 from core.registre import outil
 from core.project_store import (
@@ -15,14 +16,27 @@ from core.project_store import (
 
 @outil(
     "creer_projet",
-    "Crée un nouveau projet avec un workspace local. À utiliser quand l'utilisateur demande de créer un projet, et non une application.",
+    (
+        "Crée un nouveau projet avec un workspace local. À utiliser quand l'utilisateur "
+        "demande de créer un projet, et non une application. IMPORTANT : le projet doit "
+        "avoir un bref contexte avant sa création. Si l'utilisateur donne seulement un "
+        "nom, demande-lui ce qu'il veut construire, l'objectif principal et, si pertinent, "
+        "les technologies/outils envisagés. Ne fabrique jamais ces informations toi-même. "
+        "Une fois la réponse obtenue, mets ces précisions dans description."
+    ),
     {"type": "object", "properties": {
         "nom": {"type": "string", "description": "Nom du projet"},
-        "description": {"type": "string", "description": "Description facultative du projet"},
-    }, "required": ["nom"]},
+        "description": {
+            "type": "string",
+            "description": "Brief du projet : ce qu'on construit, objectif principal et technologies/outils utiles.",
+        },
+    }, "required": ["nom", "description"]},
     lent=False,
 )
-def creer_projet(nom: str, description: str = ""):
+def creer_projet(nom: str, description: str):
+    description = description.strip()
+    if not description:
+        return "Avant de créer le projet, demande-moi ce que nous allons construire et quel est son objectif principal."
     return _creer_projet(nom, description)
 
 
