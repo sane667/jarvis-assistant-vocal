@@ -9,16 +9,14 @@ ollama:
 
 nvidia:
   cle: ""                     # recommande : variable d'environnement NVIDIA_API_KEY
-  # Profil recommande pour Tony : rapide, bon tool calling, sans raisonnement lourd.
-  # GPT-OSS 120B reste disponible pour les agents/taches complexes.
   modele: "meta/llama-3.1-8b-instruct"
+  vision_modele: "nvidia/nemotron-nano-12b-v2-vl"
+  image_modele: "black-forest-labs/flux.2-klein-4b"
   base_url: "https://integrate.api.nvidia.com/v1"
   reasoning_effort: ""        # vide = pas de parametre de raisonnement
   max_tokens: 512
   temperature: 0.2
-  vision: false                # true uniquement avec un modele NVIDIA multimodal
 
-# NVIDIA n'impose pas ElevenLabs : Piper reste local et gratuit.
 voix_locale: piper
 piper:
   modele: ""
@@ -53,7 +51,10 @@ interruption:
 assistant:
   duree_suite: 10
   piece_nuit: "chambre"
-  personnalite: "jarvis_sarcastique"  # profil historique ; alias Tony a conserver jusqu'au refactor des presets
+  personnalite: "jarvis_sarcastique"
+projets:
+  racine: "projets"
+  dashboard_auto_ouvrir: false
 obs:
   host: "localhost"
   port: 4455
