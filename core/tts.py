@@ -7,21 +7,20 @@ retombe sur la voix Windows (SAPI) si le provider renvoie None.
   - ElevenLabsProvider : cloud (qualite max), voix configurable.
   - PiperProvider      : local, 100% offline, voix francaise Piper (.onnx).
 
-Choix par config.yaml (mode: cloud | local). En local sans modele Piper, ou en
-cloud sans cle ElevenLabs, on retombe proprement sur SAPI.
+Choix par config.yaml :
+  - cloud -> ElevenLabs
+  - local -> Piper/Kokoro selon voix_locale
+  - nvidia -> Piper/Kokoro selon voix_locale
 
-Note honnete sur le TTS local francais : Piper est recommande (voix FR eprouvees
-comme fr_FR-siwis / fr_FR-tom, tres leger, temps reel sur CPU). Kokoro (kokoro-onnx)
-ne propose qu'une voix FR recente et de qualite moyenne ; Piper est un meilleur
-choix pour le francais aujourd'hui.
+Le mode NVIDIA concerne uniquement le LLM : il ne doit pas forcer un TTS cloud.
+Cela permet d'utiliser NVIDIA gratuitement pour le cerveau et Piper localement
+pour la voix, sans cle ElevenLabs.
 """
 import json
 import logging
 import urllib.request
 from pathlib import Path
 
-# Magasin de certificats Windows (Malwarebytes intercepte le TLS : sans ca, l'appel
-# a l'API ElevenLabs echoue et Jarvis retombe sur la voix Windows).
 try:
     import truststore
     truststore.inject_into_ssl()
@@ -41,11 +40,8 @@ class ProviderTTS:
         return True
 
     def synthetiser(self, texte):
-        """Renvoie (numpy int16 mono, frequence_hz) ou None si indisponible."""
         return None
 
-
-# --------------------------------------------------------------- ElevenLabs
 
 class ElevenLabsProvider(ProviderTTS):
     nom = "ElevenLabs"
@@ -72,7 +68,7 @@ class ElevenLabsProvider(ProviderTTS):
                 d = json.loads(reponse.read().decode("utf-8"))
             self._voix_resolue = d["voices"][0]["voice_id"]
         except Exception:
-            self._voix_resolue = "21m00Tcm4TlvDq8ikWAM"   # Rachel, par defaut
+            self._voix_resolue = "21m00Tcm4TlvDq8ikWAM"
         return self._voix_resolue
 
     def synthetiser(self, texte):
@@ -83,9 +79,6 @@ class ElevenLabsProvider(ProviderTTS):
             return None
         url = f"https://api.elevenlabs.io/v1/text-to-speech/{self._resoudre_voix()}"
         charge = {"text": texte, "model_id": self.modele}
-        # Flash/Turbo v2.5 acceptent language_code : on force le francais pour une
-        # bonne prononciation des accents (e accent, c cedille...) quelle que soit
-        # la voix (sinon la langue est auto-detectee et parfois lue en anglais).
         if any(x in self.modele for x in ("flash", "turbo")):
             charge["language_code"] = reglage("elevenlabs.langue", "fr")
         corps = json.dumps(charge).encode("utf-8")
@@ -104,8 +97,6 @@ class ElevenLabsProvider(ProviderTTS):
             return None
 
 
-# --------------------------------------------------------------- Piper (local)
-
 class PiperProvider(ProviderTTS):
     nom = "Piper"
 
@@ -115,7 +106,6 @@ class PiperProvider(ProviderTTS):
 
     def _chemin(self):
         if not self.modele:
-            # a defaut, prend le premier .onnx trouve dans voix/
             trouves = list((_RACINE / "voix").glob("*.onnx"))
             return trouves[0] if trouves else None
         p = Path(self.modele)
@@ -139,14 +129,20 @@ class PiperProvider(ProviderTTS):
         try:
             if self._voix is None:
                 self._voix = PiperVoice.load(str(chemin))
-            brut = b"".join(self._voix.synthesize_stream_raw(texte))
+
+            # piper-tts recent expose synthesize() et retourne des AudioChunk.
+            # synthesize_stream_raw() appartenait a une ancienne API et n'existe
+            # plus dans les versions recentes.
+            chunks = self._voix.synthesize(texte)
+            brut = b"".join(chunk.audio_int16_bytes for chunk in chunks)
+            if not brut:
+                raise RuntimeError("Piper n'a produit aucun audio")
+
             return np.frombuffer(brut, dtype=np.int16), self._voix.config.sample_rate
         except Exception as e:
             print(f"  [Piper] echec ({e}), repli voix Windows.")
             return None
 
-
-# --------------------------------------------------------------- Kokoro (local)
 
 class KokoroProvider(ProviderTTS):
     nom = "Kokoro"
@@ -181,18 +177,19 @@ class KokoroProvider(ProviderTTS):
             return None
 
 
-# --------------------------------------------------------------- fabrique
-
 _TTS = None
 
 
 def tts():
-    """Provider TTS courant : cloud -> ElevenLabs ; local -> Piper ou Kokoro
-    (config voix_locale)."""
+    """Provider TTS courant.
+
+    Le mode NVIDIA choisit volontairement le meme TTS local que le mode local.
+    Ainsi NVIDIA peut etre utilise avec Piper sans ElevenLabs et sans cout cloud.
+    """
     global _TTS
     if _TTS is None:
         mode = (reglage("mode", "cloud") or "cloud").lower()
-        if mode == "local":
+        if mode in ("local", "nvidia"):
             moteur = (reglage("voix_locale", "piper") or "piper").lower()
             _TTS = KokoroProvider() if moteur == "kokoro" else PiperProvider()
         else:

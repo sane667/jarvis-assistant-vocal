@@ -5,17 +5,14 @@
 ![Python](https://img.shields.io/badge/python-3.13-blue)
 ![License](https://img.shields.io/badge/license-MIT-green)
 ![Platform](https://img.shields.io/badge/platform-Windows-lightgrey)
-![Mode](https://img.shields.io/badge/mode-cloud%20%7C%20local-orange)
+![Mode](https://img.shields.io/badge/mode-cloud%20%7C%20local%20%7C%20nvidia-orange)
 
 Un assistant vocal en français qui tourne **sur ta machine**. Dis *« Hey Jarvis »*,
 parle naturellement : il raisonne avec un LLM, utilise une boîte à outils extensible
-(domotique, PC, web, téléphone…) et te répond à voix haute. Deux modes au choix, en
-une ligne de config : **cloud** (Claude + ElevenLabs) ou **100 % local hors ligne**
-(Ollama + Piper).
+(domotique, PC, web, téléphone…) et te répond à voix haute. Trois modes sont disponibles :
+**cloud** (Claude + ElevenLabs), **local** (Ollama + Piper) ou **nvidia** (modèles NVIDIA NIM + TTS local/cloud).
 
-> Projet perso partagé tel quel. Cible **Windows 11**, nécessite un micro et (en mode
-> cloud) une clé API Anthropic. La plupart des intégrations sont **optionnelles** et se
-> désactivent proprement si non configurées.
+> Projet perso partagé tel quel. Cible **Windows 11**, nécessite un micro. La plupart des intégrations sont **optionnelles** et se désactivent proprement si non configurées.
 
 ## ✨ Fonctionnalités
 
@@ -37,17 +34,13 @@ une ligne de config : **cloud** (Claude + ElevenLabs) ou **100 % local hors lign
 - 🌤️ **Utilitaires** — météo, minuteurs, heure/date
 - 🔌 **Serveur MCP** — expose les outils domotique/PC à tout client MCP (Claude Desktop, Hermes…)
 
-## 🎬 Démo
-
-> 📺 *Vidéo / GIF de démo à venir — placeholder.*
-
 ## 🏗️ Architecture
 
 ```mermaid
 flowchart LR
     Mic([🎙️ Micro]) --> WW[openWakeWord<br/>« Hey Jarvis »]
     WW --> STT[faster-whisper<br/>STT — local]
-    STT --> LLM{{LLM<br/>Claude ☁️ OU Ollama 🏠}}
+    STT --> LLM{{LLM<br/>Claude ☁️ OU Ollama 🏠 OU NVIDIA ⚡}}
     LLM <-->|appels d'outils| TOOLS[🧰 Outils]
     LLM --> TTS{{TTS<br/>ElevenLabs ☁️ OU Piper 🏠}}
     TTS --> SPK([🔊 Haut-parleurs])
@@ -60,62 +53,79 @@ flowchart LR
     MCP -.-> EXT[Hermes Agent / Claude Desktop]
 ```
 
-## ☁️ Cloud vs 🏠 Local
+## ☁️ Cloud vs 🏠 Local vs ⚡ NVIDIA
 
-| | **cloud** (défaut) | **local** (hors ligne) |
-|---|---|---|
-| LLM | Claude (API Anthropic) | Ollama (`qwen3.5:4b`…) |
-| Voix | ElevenLabs | Piper (français) |
-| Transcription | faster-whisper (local) | faster-whisper (local) |
-| Qualité | maximale | bonne (selon le modèle) |
-| Coût | à l'usage | gratuit |
-| Vie privée | appels API | **rien ne sort de la machine** |
-| Matériel | léger | GPU recommandé |
+| | **cloud** | **local** | **nvidia** |
+|---|---|---|---|
+| LLM | Claude (API Anthropic) | Ollama (`qwen3.5:4b`…) | NVIDIA NIM (`meta/llama-3.1-8b-instruct`) |
+| Voix | ElevenLabs | Piper | Piper ou ElevenLabs |
+| Transcription | faster-whisper (local) | faster-whisper (local) | faster-whisper (local) |
+| Tools | ✅ | ✅ | ✅ |
+| Vision | ✅ | selon modèle | selon modèle |
+| Coût | à l'usage | gratuit | selon quota NVIDIA |
+| Vie privée | appels API | **rien ne sort de la machine** | appels API NVIDIA |
 
-Bascule en une ligne : `mode: cloud` ou `mode: local`. Voir [docs/local.md](docs/local.md)
-pour le bilan honnête de fiabilité (un modèle 7B gère bien les outils domotique/PC ;
-les **features à vision comme le navigateur & les réservations restent cloud recommandé**).
+Bascule en une ligne : `mode: cloud`, `mode: local` ou `mode: nvidia`.
 
-**Matériel local (honnête) :** Whisper `medium` ≈ 2–3 Go VRAM, `qwen3.5:4b` (Q4) ≈ 3 Go —
-une carte **6 Go** (RTX 2060/3060) fait tourner les deux confortablement. Le `qwen3.5:9b`
-(~6 Go) demande plus de marge. Piper est temps réel sur CPU. `python scripts/doctor.py`
-conseille le modèle selon ta VRAM.
+### NVIDIA recommandé pour la voix
 
-## 🚀 Démarrage rapide
+Pour l'assistant vocal, le modèle recommandé est `meta/llama-3.1-8b-instruct` : il est
+beaucoup plus réactif qu'un gros modèle de raisonnement et prend en charge le tool calling.
+Les modèles de raisonnement lourds comme `openai/gpt-oss-120b` restent intéressants pour
+une future architecture multi-agents et les tâches longues, mais ne sont pas le choix par
+défaut pour chaque commande vocale.
 
-Prérequis : **Python 3.13**, [uv](https://docs.astral.sh/uv/), Windows 11, un micro.
+La clé doit de préférence rester dans la variable d'environnement `NVIDIA_API_KEY` :
+
+```powershell
+$env:NVIDIA_API_KEY = "ta_cle_NVIDIA"
+```
+
+Puis configure :
+
+```yaml
+mode: nvidia
+nvidia:
+  modele: "meta/llama-3.1-8b-instruct"
+  reasoning_effort: ""
+  max_tokens: 512
+  temperature: 0.2
+voix_locale: piper
+```
+
+Le mode NVIDIA n'impose pas ElevenLabs : Piper reste local et gratuit.
+
+Teste le provider avant de lancer tout Jarvis :
+
+```powershell
+uv run python scripts/test_nvidia.py
+uv run python scripts/test_nvidia_compat.py
+```
+
+Le smoke test vérifie une réponse texte puis un tool call sans exécuter réellement d'outil.
+
+Pour lancer Jarvis :
 
 ```bash
-uv sync
-uv run playwright install chromium        # pour les réservations / le navigateur
-copy config.example.yaml config.yaml      # puis remplis ce dont tu as besoin
 uv run python jarvis14.py
 ```
 
-Dis **« Hey Jarvis »**. Le seul réglage strictement requis est `anthropic.cle` (mode
-cloud) ou un modèle local (mode local). Tout le reste est optionnel.
+Dis **« Hey Jarvis »**.
 
-Débutant complet ? Vois **[INSTALL_WITH_AI.md](INSTALL_WITH_AI.md)** — à coller dans
-n'importe quelle IA gratuite, elle t'installe tout pas à pas. Ou lance l'installateur
-interactif : `python scripts/setup.py`. Un souci ? `python scripts/doctor.py` diagnostique.
+## 🧰 Outils et audit
 
-## 🤝 Se faire aider par une IA (gratuitement)
+Les providers partagent le même registre d'outils : ajouter ou corriger un outil ne
+nécessite donc pas de branche spécifique NVIDIA/Ollama/Claude. Voir
+[docs/tools.md](docs/tools.md).
 
-**Pour INSTALLER** (aucune connaissance requise) — l'option zéro friction : ouvre
-n'importe quel chatbot gratuit ([Claude.ai](https://claude.ai),
-[ChatGPT](https://chat.openai.com), [Gemini](https://gemini.google.com)), colle le
-contenu de **[INSTALL_WITH_AI.md](INSTALL_WITH_AI.md)**, et laisse-toi guider.
+Avant une grosse modification du registre :
 
-**Pour MODIFIER / bidouiller le code**, plusieurs options gratuites :
+```powershell
+uv run python scripts/audit_tools.py
+```
 
-- 🏠 **Cline ou Aider + Ollama** — un assistant de code **100 % local et gratuit**, dans
-  l'esprit du projet. Le must si tu veux rester hors ligne.
-- **Gemini CLI** — gratuit, limites généreuses, agentique dans le terminal.
-- **GitHub Copilot Free** — niveau gratuit dans VS Code.
-- **Cursor** (offre gratuite) — pratique pour découvrir, mais limité.
-- **Claude Code** — si tu l'as (c'est ce qui a construit ce projet).
-
-Aucun outil n'est imposé : prends celui qui te convient.
+L'audit est non destructif : il vérifie la découverte, les schemas, les signatures
+Python et la conversion OpenAI function calling sans lancer de commandes réelles.
 
 ## ⚙️ Configuration
 
@@ -136,6 +146,8 @@ Tout est dans un unique `config.yaml` **non versionné** (copié depuis
 | Instagram | [docs/instagram.md](docs/instagram.md) |
 | Serveur MCP | [docs/mcp.md](docs/mcp.md) |
 | **Latence perçue (UX)** | [docs/latency.md](docs/latency.md) |
+| **Outils et contrat multi-provider** | [docs/tools.md](docs/tools.md) |
+| **Architecture multi-agents / Mode Projet** | [docs/agents.md](docs/agents.md) |
 
 ## 🛡️ Éthique & Sécurité
 
@@ -144,24 +156,34 @@ La confiance est intégrée, pas rajoutée :
 - **Confirmation vocale** avant toute action irréversible (envoi de mail, réservation, suppression, appel…).
 - **Les appels se présentent** honnêtement : *« Bonjour, je suis l'assistant vocal automatisé de [prénom]… »* — jamais en se faisant passer pour un humain.
 - **Jamais** de mot de passe ni de données bancaires saisis, jamais de paiement automatique.
-- **Domaines protégés** (banque, impôts, santé) sur ton vrai navigateur = **lecture seule**.
+- **Domaines protégés** (banque, impôts, santé) sur ton vrai navigateur = lecture seule.
 - **Secrets & données perso jamais versionnés** (`config.yaml`, mémoire, logs, transcriptions d'appels, tokens OAuth — tous gitignorés).
 - Au téléphone, Jarvis ne confirme que ce que tu as validé **avant** l'appel.
 
 ## 🗺️ Roadmap
 
-- [ ] Contrôle des lampes vidéo Godox (aujourd'hui Hue seulement)
-- [ ] Outils notes & rappels
+- [x] Provider NVIDIA OpenAI-compatible + tool calling
+- [x] Piper local en mode NVIDIA
+- [x] Personnalité Jarvis + réponses vocales courtes
+- [x] Briefing multi-sources
+- [x] Audit structurel du registre d'outils
 - [ ] TTS en streaming phrase par phrase (voir [docs/latency.md](docs/latency.md))
-- [ ] Boucle navigateur en 100 % local : la vision de `qwen3.5` lit déjà le texte des boutons (testé) — reste à valider le pilotage complet
-- [ ] Rafraîchissement auto des tokens Instagram entre redémarrages (partiel aujourd'hui)
+- [ ] Vision multimodale NVIDIA + routage automatique
+- [ ] Génération d'images/vidéo
+- [ ] Outils notes & rappels
+- [ ] Boucle navigateur en 100 % local : vision et pilotage complet
+- [ ] Rafraîchissement auto des tokens Instagram entre redémarrages
+- [ ] **Mode Projet + Agent Manager** (voir [docs/agents.md](docs/agents.md))
+- [ ] Elio — agent code
+- [ ] Lavanda — agent web
+- [ ] Clover — agent fichiers
 
 ## 🤝 Contribuer
 
 Ajouter un outil = un seul fichier dans `tools/` avec un décorateur `@outil(...)` — il
-est auto-découvert, aucun câblage. Issues et PR bienvenues. Merci de ne jamais committer
-de vrais secrets (vois `.gitignore`).
+est auto-découvert, aucun câblage. Merci de ne jamais committer de vrais secrets (vois
+`.gitignore`).
 
 ## 📄 Licence
 
-MIT — voir [LICENSE](LICENSE).
+MIT — voir `LICENSE`.
